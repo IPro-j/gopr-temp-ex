@@ -15,5 +15,3 @@ SERVER_PORT=8080
 
 # Environment
 ENV=development
-
-

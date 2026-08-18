@@ -1,27 +1,51 @@
 package main
 
 import (
+	"advanced-blog-management-system/pkg/database"
 	"log"
+	"os"
+	"strconv"
+
+	"github.com/joho/godotenv"
+	"github.com/sirupsen/logrus"
 )
 
 func main() {
-	// TODO: Загрузить переменные окружения из .env файла
-	// Используйте github.com/joho/godotenv для загрузки .env
+	logger := log.New(os.Stdout, "[API] ", log.LstdFlags|log.Lshortfile)
 
-	// TODO: Прочитать конфигурацию из переменных окружения
-	// Ожидаемые переменные окружения:
-	// - DB_HOST (по умолчанию: localhost)
-	// - DB_PORT (по умолчанию: 5432)
-	// - DB_USER (по умолчанию: postgres)
-	// - DB_PASSWORD (по умолчанию: postgres)
-	// - DB_NAME (по умолчанию: blog_db)
-	// - DB_SSLMODE (по умолчанию: disable)
-	// - JWT_SECRET (ОБЯЗАТЕЛЬНАЯ - секретный ключ для JWT)
-	// - SERVER_HOST (по умолчанию: 0.0.0.0)
-	// - SERVER_PORT (по умолчанию: 8080)
-	//
-	// Подсказка: используйте os.Getenv() с fallback значениями
-	// или strconv для преобразования портов в числа
+	logrus.SetFormatter(&logrus.JSONFormatter{})
+	// в Docker лучше level Info, в dev — Debug
+	logrus.SetLevel(logrus.DebugLevel)
+
+	// Создаём экземпляр  middleware
+	loggingMW := middleware.NewLoggingMiddleware(logger)
+
+	// TODO: Загрузить переменные окружения из .env файла
+
+	if err := godotenv.Load(); err != nil {
+		logger.Printf("Warning: .env file not found, using environment variables directly")
+	}
+
+	cfg := loadConfig()
+
+	dbConfig := database.Config{
+		Host:         cfg.DBHost,
+		Port:         cfg.DBPort,
+		User:         cfg.DBUser,
+		Password:     cfg.DBPassword,
+		DBName:       cfg.DBName,
+		SSLMode:      cfg.DBSSLMode,
+		MaxOpenConns: cfg.DBMaxOpenConns,
+		MaxIdleConns: cfg.DBMaxOpenConns,
+	}
+
+	db, err := database.NewPostgresDB(dbConfig)
+	if err != nil {
+		logrus.WithError(err).WithField("component", "database").Fatalf("failed to connect to database")
+	}
+
+	defer db.Close()
+	logger.Println("Database connected successfully")
 
 	// TODO: Создать подключение к PostgreSQL
 	// Используйте функцию database.NewPostgresDB из pkg/database
@@ -34,6 +58,19 @@ func main() {
 	// 1. 001_init_schema.sql (создание таблиц)
 	// 2. 002_add_indexes.sql (создание индексов)
 	// Используйте функцию database.RunMigrations()
+
+	migrations := []string{
+		"./migrations/001_init_schema.sql",
+		"./migrations/002_add_indexes.sql",
+	}
+
+	if err := database.RunMigrations(db, migrations); err != nil {
+		logrus.WithError(err).
+			WithField("component", "migrations").
+			Fatal("migrations failed")
+	}
+	//logrus.Info("migrations completed")
+	logrus.WithField("component", "migrations").Info("migrations completed successfully")
 
 	// TODO: Инициализировать репозитории
 	// Создайте экземпляры:
@@ -94,6 +131,69 @@ func main() {
 	// - Результат shutdown
 
 	log.Println("Server starting... (TODO: implement main.go)")
+}
+
+type Config struct {
+	ServerHost              string
+	ServerPort              int
+	DBHost                  string
+	DBPort                  int
+	DBUser                  string
+	DBPassword              string
+	DBName                  string
+	DBSSLMode               string
+	DBMaxOpenConns          int
+	DBMaxIdleConns          int
+	JWTSecret               string
+	JWTExpiryHours          int
+	CacheTTLMinutes         int
+	HttpReadTimeout         int
+	HttpWriteTimeout        int
+	HttpIdleTimeout         int
+	HttpShutdownGracePeriod int
+	RateLimitEnabled        bool
+	RateLimitWindowSecond   int
+	RateLimitMaxRequest     int
+}
+
+func loadConfig() *Config {
+	return &Config{
+		ServerHost:              getEnv("SERVER_HOST", "0.0.0.0"),
+		ServerPort:              getEnvAsInt("SERVER_PORT", 8080),
+		DBHost:                  getEnv("DB_HOST", "localhost"),
+		DBPort:                  getEnvAsInt("DB_PORT", 5432),
+		DBUser:                  getEnv("DB_USER", "blouser"),
+		DBPassword:              getEnv("DB_PASSWORD", "blogpassword"),
+		DBName:                  getEnv("DB_NAME", "blogdb"),
+		DBSSLMode:               getEnv("DB_SSLMODE", "disable"),
+		DBMaxOpenConns:          getEnvAsInt("DB_MAX_OPEN_CONNS", 25),
+		DBMaxIdleConns:          getEnvAsInt("DB_MAX_IDLE_CONNS", 5),
+		JWTSecret:               getEnv("JWT_SECRET", ""),
+		JWTExpiryHours:          getEnvAsInt("JWT_EXPIRY_HOURS", 24),
+		CacheTTLMinutes:         getEnvAsInt("CACHE_TTL_MINUTES", 60),
+		HttpReadTimeout:         getEnvAsInt("HTTP_READ_TIMEOUT", 15),
+		HttpWriteTimeout:        getEnvAsInt("HTTP_WRITE_TIMEOUT", 15),
+		HttpIdleTimeout:         getEnvAsInt("HTTP_IDLE_TIMEOUT", 60),
+		HttpShutdownGracePeriod: getEnvAsInt("HTTP_SHUTDOWN_GRACE_PERIOD", 30),
+		RateLimitEnabled:        os.Getenv("RATE_LIMIT_ENABLED") == "true",
+		RateLimitWindowSecond:   getEnvAsInt("RATE_LIMIT_WINDOW_SECONDS", 60),
+		RateLimitMaxRequest:     getEnvAsInt("RATE_LIMIT_MAX_REQUESTS", 100),
+	}
+}
+
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func getEnvAsInt(key string, defaultValue int) int {
+	valueStr := os.Getenv(key)
+	if value, err := strconv.Atoi(valueStr); err == nil {
+		return value
+	}
+	return defaultValue
 }
 
 func setupRouter() interface{} {
