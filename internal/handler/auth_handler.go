@@ -1,81 +1,160 @@
 package handler
 
 import (
+	"advanced-blog-management-system/internal/model"
 	"advanced-blog-management-system/internal/service"
+	"advanced-blog-management-system/pkg/apperr"
+	"advanced-blog-management-system/pkg/auth"
+	"strings"
+
+	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 )
 
+// AuthTokenResponse — ответ с токеном
+type AuthTokenResponse struct {
+	AccessToken string `json:"access_token"`
+	ExpiresAt   int64  `json:"expires_at"` // Unix timestamp
+}
+
 type AuthHandler struct {
 	userService *service.UserService
-	jwtSecret   string
+	jwtManager  *auth.JWTManager
 }
 
-func NewAuthHandler(userService *service.UserService, jwtSecret string) *AuthHandler {
+func NewAuthHandler(userService *service.UserService, jwtManager *auth.JWTManager) *AuthHandler {
 	return &AuthHandler{
 		userService: userService,
-		jwtSecret:   jwtSecret,
+		jwtManager:  jwtManager,
 	}
 }
 
-// RegisterHandler обрабатывает POST /api/register
-func (h *AuthHandler) RegisterHandler(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализовать обработчик регистрации
-	// 1. Распарсить JSON из тела запроса в структуру UserCreateRequest
-	//    Используйте json.NewDecoder(r.Body).Decode(&req)
-	// 2. Обработайте ошибку парсинга - вернуть 400 Bad Request
-	// 3. Валидировать входные данные (req.Validate())
-	// 4. Вызвать userService.Register(r.Context(), &req)
-	// 5. Обработайте различные ошибки:
-	//    - Если пользователь уже существует → 400 или 409
-	//    - Если другая ошибка сервера → 500
-	// 6. Если успешно:
-	//    - Сгенерируйте JWT токен используя pkg/auth.GenerateToken()
-	//    - Создайте TokenResponse со статусом
-	//    - Вернуть 201 Created с ответом в JSON
-	//
-	// Статус коды:
-	// - 201 Created - пользователь успешно создан
-	// - 400 Bad Request - некорректные данные или пользователь уже существует
-	// - 500 Internal Server Error - ошибка сервера
-}
+// Register обрабатывает запрос на регистрацию нового пользователя
+// POST /api/register
+func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
-// LoginHandler обрабатывает POST /api/login
-func (h *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализовать обработчик входа
-	// 1. Распарсить JSON из тела запроса в структуру UserLoginRequest
-	// 2. Обработайте ошибку парсинга - вернуть 400 Bad Request
-	// 3. Валидировать входные данные (req.Validate())
-	// 4. Вызвать userService.Login(r.Context(), &req)
-	// 5. Обработайте ошибки:
-	//    - Если пользователь не найден или пароль неверный → 401 Unauthorized
-	//    - Если другая ошибка → 500
-	// 6. Если успешно:
-	//    - Сгенерируйте JWT токен используя pkg/auth.GenerateToken()
-	//    - Создайте TokenResponse со статусом
-	//    - Вернуть 200 OK с ответом в JSON
-	//
-	// Статус коды:
-	// - 200 OK - успешный вход
-	// - 400 Bad Request - некорректные данные
-	// - 401 Unauthorized - неверные учетные данные
-	// - 500 Internal Server Error - ошибка сервера
-}
-
-// respondWithJSON - helper для отправки JSON ответов
-func (h *AuthHandler) respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
-	// TODO: Реализовать отправку JSON ответа
-	// 1. Установите заголовок Content-Type: application/json
-	// 2. Установите HTTP статус код
-	// 3. Закодируйте payload в JSON используя json.NewEncoder(w).Encode(payload)
-}
-
-// respondWithError - helper для отправки ошибок
-func (h *AuthHandler) respondWithError(w http.ResponseWriter, message string, code int) {
-	// TODO: Реализовать отправку ошибки
-	// 1. Создайте структуру с полем Error
-	// 2. Используйте respondWithJSON для отправки
-	type ErrorResponse struct {
-		Error string `json:"error"`
+	if r.Method != http.MethodPost {
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-	_ = ErrorResponse{Error: message}
+
+	var req model.UserCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// нормализация данных
+	req.Username = strings.TrimSpace(req.Username)
+	req.Email = strings.TrimSpace(req.Email)
+	req.Password = strings.TrimSpace(req.Password)
+
+	//Простая валидация
+	if req.Username == "" || req.Email == "" || req.Password == "" {
+		writeError(w, "username, email and password are required", http.StatusBadRequest)
+		return
+	}
+
+	req.Email = strings.ToLower(req.Email)
+
+	token, err := h.userService.Register(r.Context(), &req)
+
+	if err != nil {
+
+		if isUsernameError(err) {
+			log.Printf("username invalid, username=%q, err=%v", req.Username, err)
+			writeError(w, "username length is invalid", http.StatusBadRequest)
+			return
+		}
+
+		if isPasswordError(err) {
+			log.Printf("password invalid, email=%q, err=%v", req.Email, err)
+			writeError(w, "password does not meet requirements", http.StatusBadRequest)
+			return
+		}
+
+		if errors.Is(err, apperr.ErrInvalidEmail) {
+			log.Printf("invalid email, email=%q, err=%v", req.Email, err)
+			writeError(w, "email is invalid", http.StatusBadRequest)
+			return
+		}
+
+		if errors.Is(err, apperr.ErrUserAlreadyExists) || errors.Is(err, apperr.ErrEmailAlreadyExists) {
+			log.Printf("user/email already exists, username=%q email=%q, err=%v", req.Username, req.Email, err)
+			writeError(w, "user/email already exists", http.StatusConflict)
+			return
+		}
+
+		// Все остальные ошибки (БД, токены, непредвиденные)
+		log.Printf("internal error, username=%q, email=%q, path=%s, err=%v",
+			req.Username, req.Email, r.URL.Path, err)
+		writeError(w, "registration failed due to an internal error", http.StatusInternalServerError)
+		return
+
+	}
+
+	log.Printf("user registered, email=%q, username=%q", req.Email, req.Username)
+
+	accessToken, accessExp := token.Token, token.ExpiresAt
+
+	resp := AuthTokenResponse{
+		AccessToken: accessToken,
+		ExpiresAt:   accessExp.Unix(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// Login обрабатывает запрос на вход пользователя
+// POST /api/login
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req model.UserLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	req.Email = strings.TrimSpace(req.Email)
+	req.Password = strings.TrimSpace(req.Password)
+
+	if req.Email == "" || req.Password == "" {
+		writeError(w, "email and password are required", http.StatusBadRequest)
+		return
+	}
+
+	token, err := h.userService.Login(r.Context(), &req)
+	if err != nil {
+
+		if errors.Is(err, apperr.ErrInvalidCredentials) || errors.Is(err, apperr.ErrUserNotFound) {
+			log.Printf("login failed, email=%q, err=%v", req.Email, err)
+			writeError(w, "login failed,", http.StatusUnauthorized)
+			return
+		}
+
+		log.Printf("login failed, email=%q, err=%v", req.Email, err)
+		writeError(w, "login failed", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("user login is successful, email=%q", req.Email)
+
+	accessToken, accessExp := token.Token, token.ExpiresAt
+
+	resp := AuthTokenResponse{
+		AccessToken: accessToken,
+		ExpiresAt:   accessExp.Unix(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
 }

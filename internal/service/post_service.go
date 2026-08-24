@@ -3,75 +3,190 @@ package service
 import (
 	"advanced-blog-management-system/internal/model"
 	"advanced-blog-management-system/internal/repository"
+	"advanced-blog-management-system/pkg/apperr"
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 )
 
 type PostService struct {
-	postRepo    repository.PostRepository
-	userRepo    repository.UserRepository
-	commentRepo repository.CommentRepository
+	postRepo repository.PostRepository
+	//userRepo repository.UserRepository
 }
 
-func NewPostService(postRepo repository.PostRepository, userRepo repository.UserRepository, commentRepo repository.CommentRepository) *PostService {
+func NewPostService(postRepo repository.PostRepository, userRepo repository.UserRepository) *PostService {
 	return &PostService{
-		postRepo:    postRepo,
-		userRepo:    userRepo,
-		commentRepo: commentRepo,
+		postRepo: postRepo,
 	}
 }
 
-func (s *PostService) CreatePost(ctx context.Context, req *model.PostCreateRequest, authorID int) (*model.Post, error) {
-	// TODO: Реализовать создание поста
-	// 1. Валидировать входные данные (req.Validate())
-	// 2. Создать объект Post с данными из запроса
-	// 3. Если PublishAt не указан или в прошлом - установить status "published"
-	// 4. Если PublishAt в будущем - установить status "draft"
-	// 5. Сохранить пост через репозиторий
-	// 6. Вернуть созданный пост
-	return nil, nil
+// Create создаёт новый пост от имени пользователя
+func (s *PostService) Create(ctx context.Context, userID int, req *model.PostCreateRequest) (*model.Post, error) {
+	// 1. Валидация данных
+	if err := validatePostCreateRequest(req); err != nil {
+		return nil, err
+	}
+
+	// 2. Создать модель поста
+	post := &model.Post{
+		Title:    strings.TrimSpace(req.Title),
+		Content:  strings.TrimSpace(req.Content),
+		AuthorID: userID,
+	}
+
+	// 3. Сохранить через репозиторий
+	if err := s.postRepo.Create(ctx, post); err != nil {
+		return nil, fmt.Errorf("failed to create post: %w", err)
+	}
+
+	// 4. Вернуть созданный пост (с заполненным ID из БД)
+	return post, nil
 }
 
-func (s *PostService) GetPost(ctx context.Context, id int) (*model.Post, error) {
-	// TODO: Реализовать получение поста по ID
-	return nil, nil
+// GetByID получает пост по ID
+func (s *PostService) GetByID(ctx context.Context, id int) (*model.Post, error) {
+	post, err := s.postRepo.GetByID(ctx, id)
+	if err != nil {
+
+		if errors.Is(err, apperr.ErrPostNotFound) {
+			return nil, apperr.ErrPostNotFound
+		}
+		return nil, fmt.Errorf("failed to get post: %w", err)
+	}
+	return post, nil
 }
 
-func (s *PostService) GetAllPosts(ctx context.Context, limit, offset int) ([]*model.Post, error) {
-	// TODO: Реализовать получение всех постов с пагинацией
-	return nil, nil
+// GetAll получает список постов с пагинацией
+func (s *PostService) GetAll(ctx context.Context, limit, offset int) ([]*model.Post, int, error) {
+	// Никакой нормализации здесь! Сервис доверяет, что limit/offset уже валидны.
+
+	posts, err := s.postRepo.GetAll(ctx, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list posts: %w", err)
+	}
+
+	total, err := s.postRepo.GetTotalCount(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count posts: %w", err)
+	}
+
+	return posts, total, nil
 }
 
-func (s *PostService) GetPostsCount(ctx context.Context) (int, error) {
-	// TODO: Реализовать получение количества всех постов
-	return 0, nil
+// Update обновляет пост. Проверяет, что пользователь — автор.
+func (s *PostService) Update(ctx context.Context, id int, userID int, req *model.PostUpdateRequest) (*model.Post, error) {
+	// 1. Получить существующий пост
+	post, err := s.postRepo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, apperr.ErrPostNotFound) {
+			return nil, apperr.ErrPostNotFound
+		}
+		return nil, fmt.Errorf("failed to get post for update: %w", err)
+	}
+
+	// 2. Проверить, что userID является автором
+	if !post.CanBeEditedBy(userID) {
+		return nil, apperr.ErrForbidden
+	}
+
+	// 3. Валидировать новые данные
+	if err := validatePostUpdateRequest(req); err != nil {
+		return nil, err
+	}
+
+	// 4. Обновить только изменённые поля
+	if req.Title != "" {
+		post.Title = strings.TrimSpace(req.Title)
+	}
+	if req.Content != "" {
+		post.Content = strings.TrimSpace(req.Content)
+	}
+
+	// 5. Сохранить через репозиторий
+	if err := s.postRepo.Update(ctx, post); err != nil {
+		if errors.Is(err, apperr.ErrPostNotFound) {
+			return nil, apperr.ErrPostNotFound
+		}
+		return nil, fmt.Errorf("failed to update post: %w", err)
+	}
+
+	// 6. Вернуть обновлённый пост
+	return post, nil
 }
 
-func (s *PostService) UpdatePost(ctx context.Context, id int, req *model.PostUpdateRequest, userID int) (*model.Post, error) {
-	// TODO: Реализовать обновление поста
-	// 1. Валидировать входные данные
-	// 2. Получить пост по ID
-	// 3. Проверить что пользователь является автором поста (post.CanBeEditedBy(userID))
-	// 4. Обновить поля поста
-	// 5. Сохранить изменения
-	// 6. Вернуть обновленный пост
-	return nil, nil
-}
+// Delete удаляет пост. Проверяет, что пользователь — автор.
+func (s *PostService) Delete(ctx context.Context, id int, userID int) error {
+	// 1. Найти пост и проверить существование
+	post, err := s.postRepo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, apperr.ErrPostNotFound) {
+			return apperr.ErrPostNotFound
+		}
+		return fmt.Errorf("failed to get post for delete: %w", err)
+	}
 
-func (s *PostService) DeletePost(ctx context.Context, id int, userID int) error {
-	// TODO: Реализовать удаление поста
-	// 1. Получить пост по ID
-	// 2. Проверить что пользователь является автором поста (post.CanBeDeletedBy(userID))
-	// 3. Удалить пост через репозиторий
-	// 4. Также удалить все комментарии к этому посту
+	// 2. Проверить, что userID является автором
+	if !post.CanBeDeletedBy(userID) {
+		return apperr.ErrForbidden
+	}
+
+	// 3. Удалить через репозиторий
+	if err := s.postRepo.Delete(ctx, id); err != nil {
+		if errors.Is(err, apperr.ErrPostNotFound) {
+			return apperr.ErrPostNotFound
+		}
+		return fmt.Errorf("failed to delete post: %w", err)
+	}
+
 	return nil
 }
 
-func (s *PostService) GetPostsByAuthor(ctx context.Context, authorID int, limit, offset int) ([]*model.Post, error) {
-	// TODO: Реализовать получение постов автора с пагинацией
-	return nil, nil
+// validatePostCreateRequest проверяет корректность данных для создания поста
+func validatePostCreateRequest(req *model.PostCreateRequest) error {
+	if req == nil {
+		return errors.New("request cannot be nil")
+	}
+
+	title := strings.TrimSpace(req.Title)
+	content := strings.TrimSpace(req.Content)
+
+	if len(title) == 0 {
+		return errors.New("title is required")
+	}
+	if len(title) > 200 {
+		return errors.New("title must be no more than 200 characters")
+	}
+	if len(content) == 0 {
+		return errors.New("content is required")
+	}
+
+	return nil
 }
 
-func (s *PostService) GetPostsCountByAuthor(ctx context.Context, authorID int) (int, error) {
-	// TODO: Реализовать получение количества постов автора
-	return 0, nil
+// validatePostUpdateRequest проверяет корректность данных для обновления поста
+func validatePostUpdateRequest(req *model.PostUpdateRequest) error {
+	if req == nil {
+		return errors.New("request cannot be nil")
+	}
+
+	// Поля опциональны, но если переданы — должны быть валидны
+	if req.Title != "" {
+		title := strings.TrimSpace(req.Title)
+		if len(title) == 0 {
+			return errors.New("title cannot be empty if provided")
+		}
+		if len(title) > 200 {
+			return errors.New("title must be no more than 200 characters")
+		}
+	}
+
+	if req.Content != "" {
+		content := strings.TrimSpace(req.Content)
+		if len(content) == 0 {
+			return errors.New("content cannot be empty if provided")
+		}
+	}
+
+	return nil
 }

@@ -2,59 +2,117 @@ package repository
 
 import (
 	"advanced-blog-management-system/internal/model"
+	"advanced-blog-management-system/pkg/apperr"
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/lib/pq"
 )
 
-type userRepository struct {
+// UserRepo представляет репозиторий для работы с пользователями
+type UserRepo struct {
 	db *sql.DB
 }
 
-// NewUserRepository создает новый репозиторий пользователей
-func NewUserRepository(db *sql.DB) UserRepository {
-	return &userRepository{db: db}
+// NewUserRepo создает новый репозиторий пользователей
+func NewUserRepo(db *sql.DB) *UserRepo {
+	return &UserRepo{db: db}
 }
 
-func (r *userRepository) Create(ctx context.Context, user *model.User) error {
-	// TODO: Реализовать создание пользователя
-	// Вставить пользователя в таблицу users
-	// Вернуть ошибку, если email или username уже существуют
+// Create создает нового пользователя
+func (r *UserRepo) Create(ctx context.Context, user *model.User) error {
+	query := `
+		INSERT INTO users (username, email, password)
+		VALUES ($1, $2, $3)
+		RETURNING id, created_at, updated_at
+	`
+
+	var id int
+	var createdAt, updatedAt time.Time
+	err := r.db.QueryRowContext(ctx, query, user.Username, user.Email, user.Password).
+		Scan(&id, &createdAt, &updatedAt)
+	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			return apperr.ErrUserAlreadyExists
+		}
+		return fmt.Errorf("failed to create user: %w", err)
+	}
+
+	user.ID = id
+	user.CreatedAt = createdAt
+	user.UpdatedAt = updatedAt
 	return nil
 }
 
-func (r *userRepository) GetByID(ctx context.Context, id int) (*model.User, error) {
-	// TODO: Реализовать получение пользователя по ID
-	// Выполнить SELECT запрос
-	// Вернуть nil, nil если пользователь не найден
-	return nil, nil
+// GetByID получает пользователя по ID
+func (r *UserRepo) GetByID(ctx context.Context, id int) (*model.User, error) {
+	var u model.User
+	query := `SELECT id, username, email, created_at, updated_at FROM users WHERE id = $1`
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&u.ID, &u.Username, &u.Email, &u.CreatedAt, &u.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, apperr.ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user by id: %w", err)
+	}
+	return &u, nil
 }
 
-func (r *userRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
-	// TODO: Реализовать получение пользователя по email
-	return nil, nil
+// GetByEmail получает пользователя по email
+func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*model.User, error) {
+	var u model.User
+	query := `SELECT id, username, email, password, created_at, updated_at FROM users WHERE email = $1`
+	err := r.db.QueryRowContext(ctx, query, email).Scan(
+		&u.ID, &u.Username, &u.Email, &u.Password, &u.CreatedAt, &u.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, apperr.ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user by email: %w", err)
+	}
+	return &u, nil
 }
 
-func (r *userRepository) GetByUsername(ctx context.Context, username string) (*model.User, error) {
-	// TODO: Реализовать получение пользователя по username
-	return nil, nil
+// GetByUsername получает пользователя по username
+func (r *UserRepo) GetByUsername(ctx context.Context, username string) (*model.User, error) {
+	var u model.User
+	query := `SELECT id, username, email, password, created_at, updated_at FROM users WHERE username = $1`
+	err := r.db.QueryRowContext(ctx, query, username).Scan(
+		&u.ID, &u.Username, &u.Email, &u.Password, &u.CreatedAt, &u.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, apperr.ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user by username: %w", err)
+	}
+	return &u, nil
 }
 
-func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
-	// TODO: Реализовать проверку существования по email
-	return false, nil
+// ExistsByEmail проверяет существование пользователя по email
+func (r *UserRepo) ExistsByEmail(ctx context.Context, email string) (bool, error) {
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)`
+	err := r.db.QueryRowContext(ctx, query, email).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check email existence: %w", err)
+	}
+	return exists, nil
 }
 
-func (r *userRepository) ExistsByUsername(ctx context.Context, username string) (bool, error) {
-	// TODO: Реализовать проверку существования по username
-	return false, nil
-}
-
-func (r *userRepository) Update(ctx context.Context, user *model.User) error {
-	// TODO: Реализовать обновление пользователя
-	return nil
-}
-
-func (r *userRepository) Delete(ctx context.Context, id int) error {
-	// TODO: Реализовать удаление пользователя
-	return nil
+func (r *UserRepo) ExistsByUsername(ctx context.Context, username string) (bool, error) {
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)`
+	err := r.db.QueryRowContext(ctx, query, username).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check username existence: %w", err)
+	}
+	return exists, nil
 }

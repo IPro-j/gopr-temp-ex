@@ -1,14 +1,25 @@
 package handler
 
 import (
+	"advanced-blog-management-system/internal/model"
 	"advanced-blog-management-system/internal/service"
+	"advanced-blog-management-system/pkg/apperr"
 	"encoding/json"
+	"log"
 	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
 )
 
 type PostHandler struct {
 	postService *service.PostService
 }
+
+const (
+	defaultLimit = 20
+	maxLimit     = 100
+)
 
 func NewPostHandler(postService *service.PostService) *PostHandler {
 	return &PostHandler{
@@ -16,102 +27,305 @@ func NewPostHandler(postService *service.PostService) *PostHandler {
 	}
 }
 
-func (h *PostHandler) CreatePost(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализовать обработчик создания поста
-	// 1. Получить userID из контекста (middleware должно его добавить)
-	// 2. Распарсить JSON в PostCreateRequest
-	// 3. Валидировать данные (req.Validate())
-	// 4. Если валидация не прошла - вернуть 400 Bad Request
-	// 5. Вызвать postService.CreatePost()
-	// 6. Если ошибка - вернуть 500 Internal Server Error
-	// 7. Если успешно - вернуть 201 Created с PostResponse
+// Create обрабатывает создание нового поста
+func (h *PostHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID, ok := getUserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req model.PostCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	post, err := h.postService.Create(r.Context(), userID, &req)
+	if err != nil {
+		log.Printf("Create post failed: %v", err)
+		// Если в сервисе есть специфичные ошибки — можно добавить switch
+		writeError(w, "failed to create post", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(post)
 }
 
-func (h *PostHandler) GetPost(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализовать обработчик получения поста по ID
-	// 1. Извлечь ID поста из URL параметра (используя chi.URLParam или похожее)
-	// 2. Конвертировать ID в число
-	// 3. Вызвать postService.GetPost()
-	// 4. Если пост не найден - вернуть 404 Not Found
-	// 5. Если ошибка - вернуть 500 Internal Server Error
-	// 6. Если успешно - вернуть 200 OK с PostResponse
+// GetByID возвращает пост по ID
+func (h *PostHandler) GetByID(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	if idStr == "" {
+		writeError(w, "missing post id", http.StatusBadRequest)
+		return
+	}
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		writeError(w, "invalid post id", http.StatusBadRequest)
+		return
+	}
+
+	post, err := h.postService.GetByID(r.Context(), id)
+	if err != nil {
+		if err == apperr.ErrPostNotFound {
+			writeError(w, "post not found", http.StatusNotFound)
+		} else {
+			log.Printf("GetByID error: %v", err)
+			writeError(w, "failed to get post", http.StatusInternalServerError)
+		}
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(post)
 }
 
-func (h *PostHandler) GetAllPosts(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализовать обработчик получения всех постов
-	// 1. Получить параметры limit и offset из query string
-	// 2. Установить defaults: limit=10, offset=0
-	// 3. Валидировать параметры (limit должен быть > 0 и <= 100)
-	// 4. Вызвать postService.GetAllPosts()
-	// 5. Получить количество постов через postService.GetPostsCount()
-	// 6. Вернуть 200 OK с объектом:
-	//    {
-	//      "posts": [...],
-	//      "total": 42,
-	//      "limit": 10,
-	//      "offset": 0
-	//    }
+// GetAll возвращает список постов с пагинацией
+/*func (h *PostHandler) GetAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	query := r.URL.Query()
+	limit, _ := strconv.Atoi(query.Get("limit"))
+	if limit <= 0 {
+		limit = 10
+	}
+	offset, _ := strconv.Atoi(query.Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+
+	posts, total, err := h.postService.GetAll(r.Context(), limit, offset)
+	if err != nil {
+		writeError(w, "failed to get posts", http.StatusInternalServerError)
+		return
+	}
+
+	type PostsResponse struct {
+		Posts  []*model.Post `json:"posts"`
+		Total  int           `json:"total"`
+		Limit  int           `json:"limit"`
+		Offset int           `json:"offset"`
+	}
+
+	resp := PostsResponse{
+		Posts:  posts,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-}
+	_ = json.NewEncoder(w).Encode(resp)
+}*/
 
-func (h *PostHandler) UpdatePost(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализовать обработчик обновления поста
-	// 1. Получить userID из контекста
-	// 2. Извлечь ID поста из URL параметра
-	// 3. Распарсить JSON в PostUpdateRequest
-	// 4. Валидировать данные
-	// 5. Вызвать postService.UpdatePost()
-	// 6. Если пост не найден - вернуть 404 Not Found
-	// 7. Если пользователь не автор - вернуть 403 Forbidden
-	// 8. Если ошибка - вернуть 500 Internal Server Error
-	// 9. Если успешно - вернуть 200 OK с обновленным PostResponse
+// GetAll возвращает список постов с пагинацией
+func (h *PostHandler) GetAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	query := r.URL.Query()
+	limitStr := query.Get("limit")
+	offsetStr := query.Get("offset")
+
+	// 1. Валидация limit
+	limit := defaultLimit
+	if limitStr != "" {
+		l, err := strconv.Atoi(limitStr)
+		if err != nil || l <= 0 {
+			writeError(w, "invalid limit: must be a positive integer", http.StatusBadRequest)
+			return
+		}
+		limit = l
+	}
+
+	// 2. Нормализация limit (после валидации!)
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+
+	// 3. Валидация offset
+	offset := 0
+	if offsetStr != "" {
+		o, err := strconv.Atoi(offsetStr)
+		if err != nil || o < 0 {
+			writeError(w, "invalid offset: must be a non-negative integer", http.StatusBadRequest)
+			return
+		}
+		offset = o
+	}
+
+	posts, total, err := h.postService.GetAll(r.Context(), limit, offset)
+	if err != nil {
+		log.Printf("GetAll posts error: %v", err)
+		writeError(w, "failed to get posts", http.StatusInternalServerError)
+		return
+	}
+
+	type PostsResponse struct {
+		Posts  []*model.Post `json:"posts"`
+		Total  int           `json:"total"`
+		Limit  int           `json:"limit"`
+		Offset int           `json:"offset"`
+	}
+
+	resp := PostsResponse{
+		Posts:  posts,
+		Total:  total,
+		Limit:  limit, // теперь это нормализованное значение
+		Offset: offset,
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func (h *PostHandler) DeletePost(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализовать обработчик удаления поста
-	// 1. Получить userID из контекста
-	// 2. Извлечь ID поста из URL параметра
-	// 3. Вызвать postService.DeletePost()
-	// 4. Если пост не найден - вернуть 404 Not Found
-	// 5. Если пользователь не автор - вернуть 403 Forbidden
-	// 6. Если ошибка - вернуть 500 Internal Server Error
-	// 7. Если успешно - вернуть 204 No Content
+// Update обновляет пост
+func (h *PostHandler) Update(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		writeError(w, "method not allowed. Use PATCH for partial update.", http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID, ok := getUserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	if idStr == "" {
+		writeError(w, "missing post id", http.StatusBadRequest)
+		return
+	}
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		writeError(w, "invalid post id", http.StatusBadRequest)
+		return
+	}
+
+	var req model.PostUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	post, err := h.postService.Update(r.Context(), id, userID, &req)
+	if err != nil {
+		switch err {
+		case apperr.ErrPostNotFound:
+			writeError(w, "post not found", http.StatusNotFound)
+		case apperr.ErrForbidden:
+			writeError(w, "you can only update your own posts", http.StatusForbidden)
+		default:
+			log.Printf("Update post error: %v", err)
+			writeError(w, "failed to update post", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(post)
+}
+
+// Delete удаляет пост
+func (h *PostHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID, ok := getUserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	if idStr == "" {
+		writeError(w, "missing post id", http.StatusBadRequest)
+		return
+	}
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		writeError(w, "invalid post id", http.StatusBadRequest)
+		return
+	}
+
+	err = h.postService.Delete(r.Context(), id, userID)
+	if err != nil {
+		switch err {
+		case apperr.ErrPostNotFound:
+			writeError(w, "post not found", http.StatusNotFound)
+		case apperr.ErrForbidden:
+			writeError(w, "you can only delete your own posts", http.StatusForbidden)
+		default:
+			log.Printf("Delete post error: %v", err)
+			writeError(w, "failed to delete post", http.StatusInternalServerError)
+		}
+		return
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *PostHandler) GetPostsByAuthor(w http.ResponseWriter, r *http.Request) {
-	// TODO: Реализовать обработчик получения постов автора
-	// 1. Извлечь ID автора из URL параметра
-	// 2. Получить параметры limit и offset из query string
-	// 3. Установить defaults: limit=10, offset=0
-	// 4. Вызвать postService.GetPostsByAuthor()
-	// 5. Вернуть 200 OK с объектом постов и метаинформацией
+// GetByAuthor возвращает посты конкретного автора
+func (h *PostHandler) GetByAuthor(w http.ResponseWriter, r *http.Request) {
+	authorIDStr := chi.URLParam(r, "author_id") // нужно, чтобы в роуте было {author_id}
+	if authorIDStr == "" {
+		writeError(w, "missing author id", http.StatusBadRequest)
+		return
+	}
+
+	authorID, err := strconv.Atoi(authorIDStr)
+	if err != nil || authorID <= 0 {
+		writeError(w, "invalid author id", http.StatusBadRequest)
+		return
+	}
+
+	query := r.URL.Query()
+	limit, _ := strconv.Atoi(query.Get("limit"))
+	if limit <= 0 {
+		limit = 10
+	}
+	offset, _ := strconv.Atoi(query.Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+
+	/*posts, total, err := h.postService.GetByAuthor(r.Context(), authorID, limit, offset)
+	if err != nil {
+		writeError(w, "failed to get author posts", http.StatusInternalServerError)
+		return
+	}*/
+
+	type PostsResponse struct {
+		Limit    int `json:"limit"`
+		Offset   int `json:"offset"`
+		AuthorID int `json:"author_id"`
+	}
+
+	resp := PostsResponse{
+
+		Limit:    limit,
+		Offset:   offset,
+		AuthorID: authorID,
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-}
-
-func (h *PostHandler) respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(payload)
-}
-
-func (h *PostHandler) respondWithError(w http.ResponseWriter, message string, code int) {
-	type ErrorResponse struct {
-		Error string `json:"error"`
-	}
-	h.respondWithJSON(w, code, ErrorResponse{Error: message})
+	_ = json.NewEncoder(w).Encode(resp)
 }

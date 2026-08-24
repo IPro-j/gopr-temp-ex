@@ -2,81 +2,210 @@ package repository
 
 import (
 	"advanced-blog-management-system/internal/model"
+	"advanced-blog-management-system/pkg/apperr"
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
+	"time"
 )
 
-type postRepository struct {
+type PostRepo struct {
 	db *sql.DB
 }
 
-// NewPostRepository создает новый репозиторий постов
-func NewPostRepository(db *sql.DB) PostRepository {
-	return &postRepository{db: db}
+func NewPostRepo(db *sql.DB) *PostRepo {
+	return &PostRepo{db: db}
 }
 
-func (r *postRepository) Create(ctx context.Context, post *model.Post) error {
-	// TODO: Реализовать создание поста
-	// Вставить пост в таблицу posts с автоматическим заполнением timestamps
+// Create сохраняет новый пост.
+func (r *PostRepo) Create(ctx context.Context, post *model.Post) error {
+	const query = `
+		INSERT INTO posts (title, content, author_id, created_at, updated_at)
+		VALUES ($1, $2, $3, NOW(), NOW())
+		RETURNING id, created_at, updated_at
+	`
+
+	err := r.db.QueryRowContext(ctx, query, post.Title, post.Content, post.AuthorID).
+		Scan(&post.ID, &post.CreatedAt, &post.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to create post: %w", err)
+	}
+
 	return nil
 }
 
-func (r *postRepository) GetByID(ctx context.Context, id int) (*model.Post, error) {
-	// TODO: Реализовать получение поста по ID
-	// Выполнить SELECT запрос
-	// Вернуть nil, nil если пост не найден
-	return nil, nil
+func (r *PostRepo) Exists(ctx context.Context, id int) (bool, error) {
+	var count int
+	query := `SELECT COUNT(*) FROM posts WHERE id = $1`
+	err := r.db.QueryRowContext(ctx, query, id).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
-func (r *postRepository) GetAll(ctx context.Context, limit, offset int) ([]*model.Post, error) {
-	// TODO: Реализовать получение всех постов с пагинацией
-	// Использовать LIMIT и OFFSET
-	// Отсортировать по created_at DESC
-	return nil, nil
+// GetByID получает пост по ID. Если не найден — возвращает ErrPostNotFound.
+func (r *PostRepo) GetByID(ctx context.Context, id int) (*model.Post, error) {
+	const query = `
+		SELECT id, title, content, author_id, created_at, updated_at
+		FROM posts
+		WHERE id = $1
+	`
+
+	row := r.db.QueryRowContext(ctx, query, id)
+
+	var p model.Post
+	err := row.Scan(&p.ID, &p.Title, &p.Content, &p.AuthorID, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, apperr.ErrPostNotFound
+		}
+		return nil, fmt.Errorf("failed to get post by ID: %w", err)
+	}
+
+	return &p, nil
 }
 
-func (r *postRepository) GetTotalCount(ctx context.Context) (int, error) {
-	// TODO: Реализовать получение общего количества постов
-	return 0, nil
+func (r *PostRepo) GetTotalCount(ctx context.Context) (int, error) {
+	var count int
+	query := `SELECT COUNT(*) FROM posts`
+	err := r.db.QueryRowContext(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
-func (r *postRepository) Update(ctx context.Context, post *model.Post) error {
-	// TODO: Реализовать обновление поста
-	// Обновить поля title, content, status, publish_at
-	// Обновить updated_at
+func (r *PostRepo) GetAll(ctx context.Context, limit, offset int) ([]*model.Post, error) {
+	query := `
+		SELECT id, title, content, author_id, created_at, updated_at
+		FROM posts
+		ORDER BY created_at DESC
+		LIMIT $1 OFFSET $2
+	`
+	rows, err := r.db.QueryContext(ctx, query, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var posts []*model.Post
+	for rows.Next() {
+		var p model.Post
+		err = rows.Scan(
+			&p.ID,
+			&p.Title,
+			&p.Content,
+			&p.AuthorID,
+			&p.CreatedAt,
+			&p.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		posts = append(posts, &p)
+	}
+
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+
+	return posts, nil
+}
+
+// Update обновляет существующие поля поста.
+func (r *PostRepo) Update(ctx context.Context, post *model.Post) error {
+	const query = `
+		UPDATE posts
+		SET title = $1, content = $2, updated_at = NOW()
+		WHERE id = $3
+	`
+
+	res, err := r.db.ExecContext(ctx, query, post.Title, post.Content, post.ID)
+	if err != nil {
+		return fmt.Errorf("failed to update post: %w", err)
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+
+	if n == 0 {
+		// Пост с таким ID не найден — можно вернуть NotFound, но обычно это проверяется до вызова Update
+		return apperr.ErrPostNotFound
+	}
+
+	// Обновляем updated_at в памяти, чтобы не делать лишний SELECT
+	post.UpdatedAt = time.Now()
+
 	return nil
 }
 
-func (r *postRepository) Delete(ctx context.Context, id int) error {
-	// TODO: Реализовать удаление поста
+// Delete удаляет пост по ID.
+func (r *PostRepo) Delete(ctx context.Context, id int) error {
+	const query = `DELETE FROM posts WHERE id = $1`
+
+	res, err := r.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete post: %w", err)
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+
+	if n == 0 {
+		return apperr.ErrPostNotFound
+	}
+
 	return nil
 }
 
-func (r *postRepository) Exists(ctx context.Context, id int) (bool, error) {
-	// TODO: Реализовать проверку существования поста
-	return false, nil
+// ListByAuthor возвращает посты конкретного автора с пагинацией.
+func (r *PostRepo) ListByAuthor(ctx context.Context, authorID int, limit, offset int) ([]*model.Post, error) {
+	const query = `
+		SELECT id, title, content, author_id, created_at, updated_at
+		FROM posts
+		WHERE author_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, authorID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list posts by author: %w", err)
+	}
+	defer rows.Close()
+
+	var posts []*model.Post
+	for rows.Next() {
+		var p model.Post
+		err := rows.Scan(&p.ID, &p.Title, &p.Content, &p.AuthorID, &p.CreatedAt, &p.UpdatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan post row for author: %w", err)
+		}
+		posts = append(posts, &p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating posts by author rows: %w", err)
+	}
+
+	return posts, nil
 }
 
-func (r *postRepository) GetByAuthorID(ctx context.Context, authorID int, limit, offset int) ([]*model.Post, error) {
-	// TODO: Реализовать получение постов по ID автора с пагинацией
-	return nil, nil
-}
+// CountByAuthor возвращает общее количество постов автора (для пагинации).
+func (r *PostRepo) CountByAuthor(ctx context.Context, authorID int) (int, error) {
+	const query = `SELECT COUNT(*) FROM posts WHERE author_id = $1`
 
-func (r *postRepository) GetTotalCountByAuthorID(ctx context.Context, authorID int) (int, error) {
-	// TODO: Реализовать получение количества постов по ID автора
-	return 0, nil
-}
+	var total int
+	err := r.db.QueryRowContext(ctx, query, authorID).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count posts by author: %w", err)
+	}
 
-func (r *postRepository) GetScheduledPosts(ctx context.Context) ([]*model.Post, error) {
-	// TODO: Реализовать получение постов со статусом draft и publish_at <= NOW()
-	// Это посты, которые должны быть автоматически опубликованы
-	return nil, nil
-}
-
-func (r *postRepository) PublishPost(ctx context.Context, id int) error {
-	// TODO: Реализовать публикацию поста
-	// Установить status = 'published'
-	// Очистить publish_at (установить на NULL)
-	// Обновить updated_at
-	return nil
+	return total, nil
 }

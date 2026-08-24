@@ -1,29 +1,39 @@
 package main
 
 import (
+	"advanced-blog-management-system/internal/handler"
+	"advanced-blog-management-system/internal/middleware"
+	"advanced-blog-management-system/internal/repository"
+	"advanced-blog-management-system/internal/service"
+	"advanced-blog-management-system/pkg/auth"
 	"advanced-blog-management-system/pkg/database"
-	"log"
+	"context"
+	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
 )
 
 func main() {
-	logger := log.New(os.Stdout, "[API] ", log.LstdFlags|log.Lshortfile)
 
-	logrus.SetFormatter(&logrus.JSONFormatter{})
 	// в Docker лучше level Info, в dev — Debug
 	logrus.SetLevel(logrus.DebugLevel)
 
 	// Создаём экземпляр  middleware
-	loggingMW := middleware.NewLoggingMiddleware(logger)
-
-	// TODO: Загрузить переменные окружения из .env файла
+	loggingMW := middleware.NewLoggingMiddleware(logrus.StandardLogger())
 
 	if err := godotenv.Load(); err != nil {
-		logger.Printf("Warning: .env file not found, using environment variables directly")
+		//logger.Printf("Warning: .env file not found, using environment variables directly")
+		logrus.WithError(err).
+			WithField("component", "config").
+			Warn("`.env` file not found, using environment variables directly")
+
 	}
 
 	cfg := loadConfig()
@@ -44,20 +54,7 @@ func main() {
 		logrus.WithError(err).WithField("component", "database").Fatalf("failed to connect to database")
 	}
 
-	defer db.Close()
-	logger.Println("Database connected successfully")
-
-	// TODO: Создать подключение к PostgreSQL
-	// Используйте функцию database.NewPostgresDB из pkg/database
-	// Передайте конфигурацию БД
-	// Обработайте возможные ошибки подключения
-
-	// TODO: Выполнить миграции БД
-	// Прочитайте SQL файлы из папки migrations/
-	// Выполните их в нужном порядке:
-	// 1. 001_init_schema.sql (создание таблиц)
-	// 2. 002_add_indexes.sql (создание индексов)
-	// Используйте функцию database.RunMigrations()
+	logrus.WithField("component", "database").Info("mDatabase connected successfully")
 
 	migrations := []string{
 		"./migrations/001_init_schema.sql",
@@ -69,68 +66,100 @@ func main() {
 			WithField("component", "migrations").
 			Fatal("migrations failed")
 	}
-	//logrus.Info("migrations completed")
+
 	logrus.WithField("component", "migrations").Info("migrations completed successfully")
 
-	// TODO: Инициализировать репозитории
-	// Создайте экземпляры:
-	// - UserRepository
-	// - PostRepository
-	// - CommentRepository
-	// Передайте им подключение к БД
+	jwtManager, err := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTExpiryHours)
+	if err != nil {
+		logrus.WithError(err).
+			WithField("component", "jwt").
+			Fatalf("failed to create JWT manager: %v", err)
+	}
 
-	// TODO: Инициализировать сервисы
-	// Создайте экземпляры:
-	// - UserService (передайте userRepository)
-	// - PostService (передайте postRepository, userRepository, commentRepository)
-	// - CommentService (передайте commentRepository, postRepository, userRepository)
+	postRepo := repository.NewPostRepo(db)
+	commentRepo := repository.NewCommentRepo(db)
+	userRepo := repository.NewUserRepo(db)
 
-	// TODO: Инициализировать обработчики (handlers)
-	// Создайте экземпляры:
-	// - AuthHandler (передайте userService и JWT_SECRET)
-	// - PostHandler (передайте postService)
-	// - CommentHandler (передайте commentService)
+	userService := service.NewUserService(userRepo, jwtManager)
+	postService := service.NewPostService(postRepo, userRepo)
+	commentService := service.NewCommentService(commentRepo, postRepo)
 
-	// TODO: Создать и настроить HTTP роутер
-	// Вызовите функцию setupRouter() которая вернет chi.Mux
-	// Роутер должен содержать:
-	// - Все middleware (логирование, recovery, CORS, аутентификация где нужна)
-	// - Все HTTP эндпоинты согласно спецификации
+	authHandler := handler.NewAuthHandler(userService, jwtManager)
+	postHandler := handler.NewPostHandler(postService)
+	commentHandler := handler.NewCommentHandler(commentService)
 
-	// TODO: Создать HTTP сервер
-	// Создайте структуру http.Server с:
-	// - Addr: полученный из конфигурации адрес и порт
-	// - Handler: роутер
-	// - ReadTimeout: 15 секунд
-	// - WriteTimeout: 15 секунд
-	// - IdleTimeout: 60 секунд
+	authMW := middleware.NewAuthMiddleware(jwtManager)
 
-	// TODO: Запустить сервер в отдельной горутине
-	// go func() { ... }()
-	// Обработайте ошибку http.ErrServerClosed как успех (это нормально при shutdown)
+	router := chi.NewRouter()
 
-	// TODO: Установить обработчик сигналов завершения
-	// Перехватите сигналы SIGINT и SIGTERM (ctrl+C, kill и т.д.)
-	// Используйте os.Signal и signal.Notify()
+	router.Use(loggingMW.Chain())
 
-	// TODO: Graceful shutdown
-	// Когда получен сигнал завершения:
-	// 1. Логируйте информацию о завершении
-	// 2. Создайте контекст с таймаутом (5-10 секунд)
-	// 3. Вызовите srv.Shutdown(ctx) для корректного завершения
-	// 4. Закройте подключение к БД: db.Close()
-	// 5. Выйдите из программы
+	router.Route("/api", func(r chi.Router) {
 
-	// TODO: Логирование
-	// В главной функции логируйте ключевые события:
-	// - Загрузка конфигурации
-	// - Подключение к БД
-	// - Выполнение миграций
-	// - Запуск сервера (какой адрес и порт)
-	// - Получение сигнала завершения
-	// - Результат shutdown
+		//проверка состояния сервиса (GET /api/health)
+		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"ok","service":"blog-api"}`))
+		})
 
-	log.Println("Server starting... (TODO: implement main.go)")
+		r.Post("/register", authHandler.Register)
+		r.Post("/login", authHandler.Login)
+		r.Get("/posts", postHandler.GetAll)
+		r.Get("/posts/{id}", postHandler.GetByID)
+		r.Get("/posts/{id}/comments", commentHandler.GetByPost)
+
+		r.Group(func(r chi.Router) {
+			r.Use(authMW.AuthMiddlewareForChi()) // авторизация только тут
+			r.Post("/posts", postHandler.Create)
+			r.Patch("/posts/{id}", postHandler.Update)
+			r.Delete("/posts/{id}", postHandler.Delete)
+			r.Post("/posts/{id}/comments", commentHandler.Create)
+			r.Put("/comments/{id}", commentHandler.Update)
+			r.Delete("/comments/{id}", commentHandler.Delete)
+		})
+
+	})
+
+	srv := &http.Server{
+		Addr:         cfg.ServerHost + ":" + strconv.Itoa(cfg.ServerPort),
+		Handler:      router,
+		ReadTimeout:  time.Duration(cfg.HttpReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(cfg.HttpWriteTimeout) * time.Second,
+		IdleTimeout:  time.Duration(cfg.HttpIdleTimeout) * time.Second,
+	}
+
+	logrus.
+		WithField("component", "http_server").
+		WithField("addr", srv.Addr).
+		WithField("read_timeout_seconds", srv.ReadTimeout).
+		WithField("write_timeout_seconds", srv.WriteTimeout).
+		WithField("idle_timeout_seconds", srv.IdleTimeout).
+		Info("starting HTTP server")
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logrus.WithError(err).Fatal("server failed to start")
+			//logger.Fatalf("Server failed to start: %v", err)
+		}
+	}()
+
+	<-stop
+	logrus.Info("shutdown signal received")
+	//	logger.Println("Shutdown signal received")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.HttpShutdownGracePeriod))
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logrus.WithError(err).Error("graceful shutdown failed")
+	} else {
+		logrus.Info("server stopped gracefully")
+	}
+
 }
 
 type Config struct {
@@ -162,7 +191,7 @@ func loadConfig() *Config {
 		ServerPort:              getEnvAsInt("SERVER_PORT", 8080),
 		DBHost:                  getEnv("DB_HOST", "localhost"),
 		DBPort:                  getEnvAsInt("DB_PORT", 5432),
-		DBUser:                  getEnv("DB_USER", "blouser"),
+		DBUser:                  getEnv("DB_USER", "bloguser"),
 		DBPassword:              getEnv("DB_PASSWORD", "blogpassword"),
 		DBName:                  getEnv("DB_NAME", "blogdb"),
 		DBSSLMode:               getEnv("DB_SSLMODE", "disable"),

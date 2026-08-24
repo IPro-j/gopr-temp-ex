@@ -1,57 +1,121 @@
 package middleware
 
 import (
+	"advanced-blog-management-system/pkg/auth"
+	"context"
+	"encoding/json"
 	"net/http"
+	"strings"
 )
 
-// UserContextKey используется для сохранения данных пользователя в context
-type UserContextKey string
+const (
+	// UserIDKey — ключ для хранения ID пользователя в контексте
+	UserIDKey contextKey = "userID"
+	// UserEmailKey — ключ для хранения email пользователя в контексте
+	UserEmailKey contextKey = "userEmail"
+	// UserNameKey — ключ для хранения username пользователя в контексте
+	UserNameKey contextKey = "username"
+)
 
-const UserKey UserContextKey = "user"
-
-// AuthMiddleware проверяет JWT токен и добавляет данные пользователя в context
-func AuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// TODO: Реализовать middleware аутентификации
-		// 1. Получить токен из заголовка Authorization (Bearer <token>)
-		// 2. Если токена нет или формат неверный - вернуть 401
-		// 3. Валидировать токен (использовать jwt.ParseWithClaims)
-		// 4. Если токен невалидный - вернуть 401
-		// 5. Извлечь user_id из claims
-		// 6. Добавить user_id в context запроса
-		// 7. Передать request дальше в цепь middleware
-		next.ServeHTTP(w, r)
-	})
+// ErrorResponse — структура для единообразного возврата ошибок в JSON
+type ErrorResponse struct {
+	Error string `json:"error"`
 }
 
-// OptionalAuthMiddleware проверяет JWT токен если он присутствует, но не обязателен
-func OptionalAuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// TODO: Реализовать опциональное middleware аутентификации
-		// 1. Получить токен из заголовка Authorization если присутствует
-		// 2. Если токен есть - валидировать его
-		// 3. Если токен валидный - добавить user_id в context
-		// 4. Если токена нет или он невалидный - просто передать request дальше
-		// 5. Передать request дальше в цепь middleware
-		next.ServeHTTP(w, r)
-	})
+// AuthMiddleware предоставляет middleware для JWT-аутентификации
+type AuthMiddleware struct {
+	jwtManager *auth.JWTManager
 }
 
-// GetUserFromContext извлекает пользователя из context
-func GetUserIDFromContext(r *http.Request) (int, bool) {
-	// TODO: Реализовать извлечение user_id из context
-	// Получить значение из context по ключу UserKey
-	// Попробовать привести его к int
-	// Вернуть user_id и флаг успеха
-	return 0, false
+// NewAuthMiddleware создаёт новый экземпляр middleware аутентификации
+func NewAuthMiddleware(jwtManager *auth.JWTManager) *AuthMiddleware {
+	return &AuthMiddleware{
+		jwtManager: jwtManager,
+	}
 }
 
-// ExtractToken извлекает JWT токен из заголовка Authorization
-func ExtractToken(r *http.Request) (string, error) {
-	// TODO: Реализовать извлечение токена из заголовка
-	// 1. Получить заголовок Authorization
-	// 2. Проверить что он начинается с "Bearer "
-	// 3. Извлечь токен после "Bearer "
-	// 4. Вернуть токен или ошибку если формат неверный
-	return "", nil
+// RequireAuth — middleware, требующий валидный JWT-токен.
+// Если токена нет или он невалиден — возвращает 401.
+func (m *AuthMiddleware) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := extractToken(r)
+		if token == "" {
+			writeJSONError(w, "missing authorization token", http.StatusUnauthorized)
+			return
+		}
+
+		claims, err := m.jwtManager.ValidateToken(token)
+		if err != nil {
+			writeJSONError(w, "invalid or expired token", http.StatusUnauthorized)
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), UserIDKey, claims.UserID)
+		ctx = context.WithValue(ctx, UserEmailKey, claims.Email)
+		ctx = context.WithValue(ctx, UserNameKey, claims.Username)
+
+		next(w, r.WithContext(ctx))
+	}
+}
+
+// extractToken извлекает JWT-токен из заголовка Authorization.
+// Ожидаемый формат: "Bearer <token>"
+func extractToken(r *http.Request) string {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return ""
+	}
+
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return ""
+	}
+
+	return parts[1]
+}
+
+// GetUserIDFromContext извлекает ID пользователя из контекста
+func GetUserIDFromContext(ctx context.Context) (int, bool) {
+	val, ok := ctx.Value(UserIDKey).(int)
+	return val, ok
+}
+
+// GetUserEmailFromContext извлекает email пользователя из контекста
+func GetUserEmailFromContext(ctx context.Context) (string, bool) {
+	val, ok := ctx.Value(UserEmailKey).(string)
+	return val, ok
+}
+
+// GetUsernameFromContext извлекает username из контекста
+func GetUsernameFromContext(ctx context.Context) (string, bool) {
+	val, ok := ctx.Value(UserNameKey).(string)
+	return val, ok
+}
+
+// writeJSONError отправляет ошибку в формате JSON
+func writeJSONError(w http.ResponseWriter, message string, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(ErrorResponse{Error: message})
+}
+
+// Chain позволяет объединить несколько middleware в цепочку.
+func Chain(handler http.HandlerFunc, middlewares ...func(http.HandlerFunc) http.HandlerFunc) http.HandlerFunc {
+	wrapped := handler
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		wrapped = middlewares[i](wrapped)
+	}
+	return wrapped
+}
+
+// AuthMiddlewareForChi возвращает middleware, совместимый с chi.Router.Use.
+func (m *AuthMiddleware) AuthMiddlewareForChi() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Превращаем next (Handler) в HandlerFunc, чтобы можно было передать в RequireAuth
+			nextHandlerFunc := http.HandlerFunc(next.ServeHTTP)
+			wrapped := m.RequireAuth(nextHandlerFunc)
+			wrapped.ServeHTTP(w, r)
+		})
+	}
 }

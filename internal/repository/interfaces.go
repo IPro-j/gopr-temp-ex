@@ -24,12 +24,6 @@ type UserRepository interface {
 
 	// ExistsByUsername проверяет существование пользователя по username
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
-
-	// Update обновляет данные пользователя
-	Update(ctx context.Context, user *model.User) error
-
-	// Delete удаляет пользователя
-	Delete(ctx context.Context, id int) error
 }
 
 // PostRepository определяет интерфейс для работы с постами
@@ -56,18 +50,6 @@ type PostRepository interface {
 
 	// Exists проверяет существование поста по ID
 	Exists(ctx context.Context, id int) (bool, error)
-
-	// GetByAuthorID получает посты определенного автора
-	GetByAuthorID(ctx context.Context, authorID int, limit, offset int) ([]*model.Post, error)
-
-	// GetTotalCountByAuthorID получает общее количество постов автора
-	GetTotalCountByAuthorID(ctx context.Context, authorID int) (int, error)
-
-	// GetScheduledPosts получает посты, которые должны быть опубликованы
-	GetScheduledPosts(ctx context.Context) ([]*model.Post, error)
-
-	// PublishPost меняет статус поста на published и очищает publish_at
-	PublishPost(ctx context.Context, id int) error
 }
 
 // CommentRepository определяет интерфейс для работы с комментариями
@@ -84,9 +66,6 @@ type CommentRepository interface {
 	// GetCountByPostID получает количество комментариев к посту
 	GetCountByPostID(ctx context.Context, postID int) (int, error)
 
-	// Update обновляет комментарий
 	Update(ctx context.Context, comment *model.Comment) error
-
-	// Delete удаляет комментарий
 	Delete(ctx context.Context, id int) error
 }

@@ -3,67 +3,193 @@ package service
 import (
 	"advanced-blog-management-system/internal/model"
 	"advanced-blog-management-system/internal/repository"
+	"advanced-blog-management-system/pkg/apperr"
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 )
 
 type CommentService struct {
 	commentRepo repository.CommentRepository
 	postRepo    repository.PostRepository
-	userRepo    repository.UserRepository
+	//userRepo    repository.UserRepository
 }
 
-func NewCommentService(commentRepo repository.CommentRepository, postRepo repository.PostRepository, userRepo repository.UserRepository) *CommentService {
+func NewCommentService(
+	commentRepo repository.CommentRepository,
+	postRepo repository.PostRepository,
+	//userRepo repository.UserRepository,
+) *CommentService {
 	return &CommentService{
 		commentRepo: commentRepo,
 		postRepo:    postRepo,
-		userRepo:    userRepo,
+		//	userRepo:    userRepo,
 	}
 }
 
-func (s *CommentService) CreateComment(ctx context.Context, req *model.CommentCreateRequest, postID int, authorID int) (*model.Comment, error) {
-	// TODO: Реализовать создание комментария
-	// 1. Валидировать входные данные (req.Validate())
-	// 2. Проверить что пост существует
-	// 3. Проверить что пост опубликован (status == "published")
-	// 4. Создать объект Comment с данными из запроса
-	// 5. Сохранить комментарий через репозиторий
-	// 6. Вернуть созданный комментарий
-	return nil, nil
+// Create создаёт новый комментарий к посту
+func (s *CommentService) Create(ctx context.Context, postID, userID int, req *model.CommentCreateRequest) (*model.Comment, error) {
+	if err := validateCommentCreateRequest(req); err != nil {
+		return nil, err
+	}
+
+	// 1. Проверяем, что пост существует
+	_, err := s.postRepo.GetByID(ctx, postID)
+	if err != nil {
+		if errors.Is(err, apperr.ErrPostNotFound) {
+			return nil, apperr.ErrPostNotExists // 404
+		}
+		return nil, fmt.Errorf("failed to check post existence: %w", err)
+	}
+
+	comment := &model.Comment{
+		Content:  strings.TrimSpace(req.Content),
+		PostID:   postID,
+		AuthorID: userID,
+	}
+
+	if err := s.commentRepo.Create(ctx, comment); err != nil {
+		return nil, fmt.Errorf("failed to create comment: %w", err)
+	}
+
+	return comment, nil
 }
 
-func (s *CommentService) GetComment(ctx context.Context, id int) (*model.Comment, error) {
-	// TODO: Реализовать получение комментария по ID
-	return nil, nil
+// GetByID получает комментарий по ID
+func (s *CommentService) GetByID(ctx context.Context, id int) (*model.Comment, error) {
+	comment, err := s.commentRepo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, apperr.ErrCommentNotFound) {
+			return nil, apperr.ErrCommentNotFound
+		}
+		return nil, fmt.Errorf("failed to get comment by ID: %w", err)
+	}
+	return comment, nil
 }
 
-func (s *CommentService) GetCommentsByPostID(ctx context.Context, postID int, limit, offset int) ([]*model.Comment, error) {
-	// TODO: Реализовать получение комментариев к посту с пагинацией
-	// 1. Проверить что пост существует
-	// 2. Получить комментарии с пагинацией
-	// 3. Вернуть список комментариев
-	return nil, nil
+// GetByPost получает комментарии к посту с пагинацией
+func (s *CommentService) GetByPost(ctx context.Context, postID int, limit, offset int) ([]*model.Comment, int, error) {
+	const (
+		defaultLimit = 20
+		maxLimit     = 100
+	)
+
+	if limit <= 0 {
+		limit = defaultLimit
+	} else if limit > maxLimit {
+		limit = maxLimit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	// проверка существования поста
+	_, err := s.postRepo.GetByID(ctx, postID)
+	if err != nil {
+		if errors.Is(err, apperr.ErrPostNotFound) {
+			return nil, 0, apperr.ErrPostNotExists
+		}
+		return nil, 0, fmt.Errorf("failed to check post existence for comments: %w", err)
+	}
+
+	comments, err := s.commentRepo.GetByPostID(ctx, postID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list comments by post: %w", err)
+	}
+
+	total, err := s.commentRepo.GetCountByPostID(ctx, postID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count comments by post: %w", err)
+	}
+
+	return comments, total, nil
 }
 
-func (s *CommentService) GetCommentsCountByPostID(ctx context.Context, postID int) (int, error) {
-	// TODO: Реализовать получение количества комментариев к посту
-	return 0, nil
+// Update обновляет комментарий (только content)
+func (s *CommentService) Update(ctx context.Context, id int, userID int, req *model.CommentUpdateRequest) (*model.Comment, error) {
+	comment, err := s.commentRepo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, apperr.ErrCommentNotFound) {
+			return nil, apperr.ErrCommentNotFound
+		}
+		return nil, fmt.Errorf("failed to get comment for update: %w", err)
+	}
+
+	// Используем метод модели для проверки прав
+	if !comment.CanBeEditedBy(userID) {
+		return nil, apperr.ErrForbidden
+	}
+
+	if err := validateCommentUpdateRequest(req); err != nil {
+		return nil, err
+	}
+
+	comment.Content = strings.TrimSpace(req.Content)
+	// updated_at обновится внутри репозитория
+
+	if err := s.commentRepo.Update(ctx, comment); err != nil {
+		if errors.Is(err, apperr.ErrCommentNotFound) {
+			return nil, apperr.ErrCommentNotFound
+		}
+		return nil, fmt.Errorf("failed to update comment: %w", err)
+	}
+
+	return comment, nil
 }
 
-func (s *CommentService) UpdateComment(ctx context.Context, id int, req *model.CommentUpdateRequest, userID int) (*model.Comment, error) {
-	// TODO: Реализовать обновление комментария
-	// 1. Валидировать входные данные
-	// 2. Получить комментарий по ID
-	// 3. Проверить что пользователь является автором комментария (comment.CanBeEditedBy(userID))
-	// 4. Обновить поле content
-	// 5. Сохранить изменения
-	// 6. Вернуть обновленный комментарий
-	return nil, nil
+// Delete удаляет комментарий
+func (s *CommentService) Delete(ctx context.Context, id int, userID int) error {
+	comment, err := s.commentRepo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, apperr.ErrCommentNotFound) {
+			return apperr.ErrCommentNotFound
+		}
+		return fmt.Errorf("failed to get comment for delete: %w", err)
+	}
+
+	if !comment.CanBeDeletedBy(userID) {
+		return apperr.ErrForbidden
+	}
+
+	if err := s.commentRepo.Delete(ctx, id); err != nil {
+		if errors.Is(err, apperr.ErrCommentNotFound) {
+			return apperr.ErrCommentNotFound
+		}
+		return fmt.Errorf("failed to delete comment: %w", err)
+	}
+
+	return nil
 }
 
-func (s *CommentService) DeleteComment(ctx context.Context, id int, userID int) error {
-	// TODO: Реализовать удаление комментария
-	// 1. Получить комментарий по ID
-	// 2. Проверить что пользователь является автором комментария (comment.CanBeDeletedBy(userID))
-	// 3. Удалить комментарий через репозиторий
+func validateCommentCreateRequest(req *model.CommentCreateRequest) error {
+	if req == nil {
+		return errors.New("request cannot be nil")
+	}
+
+	content := strings.TrimSpace(req.Content)
+	if len(content) == 0 {
+		return errors.New("content is required")
+	}
+	if len([]rune(content)) > 1000 {
+		return errors.New("content must be no more than 1000 characters")
+	}
+
+	return nil
+}
+
+func validateCommentUpdateRequest(req *model.CommentUpdateRequest) error {
+	if req == nil {
+		return errors.New("request cannot be nil")
+	}
+
+	content := strings.TrimSpace(req.Content)
+	if len(content) == 0 {
+		return errors.New("content cannot be empty")
+	}
+	if len([]rune(content)) > 1000 {
+		return errors.New("content must be no more than 1000 characters")
+	}
+
 	return nil
 }
