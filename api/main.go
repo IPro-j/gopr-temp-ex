@@ -56,6 +56,25 @@ func main() {
 
 	logrus.WithField("component", "database").Info("mDatabase connected successfully")
 
+
+	if cfg.RateLimitEnabled {
+	windowSeconds := int64(cfg.RateLimitWindowSecond)
+	capacity := int64(cfg.RateLimitMaxRequest)
+	rate := float64(capacity) / float64(windowSeconds)
+
+	rateLimiter := middleware.NewRateLimiter(rate, capacity)
+	loggingMW.SetRateLimiter(rateLimiter)
+
+	logrus.WithFields(logrus.Fields{
+		"component":         "rate_limiter",
+		"rate_tokens_per_sec": rate,
+		"capacity":           capacity,
+		"window_seconds":     windowSeconds,
+	}).Info("rate limiter enabled")
+} else {
+	logrus.WithField("component", "rate_limiter").Info("rate limiter disabled")
+}
+
 	migrations := []string{
 		"./migrations/001_init_schema.sql",
 		"./migrations/002_add_indexes.sql",

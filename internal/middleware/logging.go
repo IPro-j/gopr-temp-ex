@@ -25,17 +25,77 @@ const (
 //	logger *log.Logger
 //}
 
-// LoggingMiddleware предоставляет утилиты: логирование, CORS, recovery, request ID и т.д.
+
 type LoggingMiddleware struct {
-	logger *logrus.Entry
+	logger          *logrus.Entry
+	rateLimiter     *RateLimiter
+	rateLimitEnabled bool
 }
 
-// NewLoggingMiddleware создаёт новый экземпляр middleware
 func NewLoggingMiddleware(logger *logrus.Logger) *LoggingMiddleware {
 	return &LoggingMiddleware{
 		logger: logger.WithField("component", "middleware"),
 	}
 }
+
+// SetRateLimiter подключает rate limiter к middleware
+func (m *LoggingMiddleware) SetRateLimiter(rl *RateLimiter) {
+	m.rateLimiter = rl
+	m.rateLimitEnabled = true
+}
+
+
+func (m *LoggingMiddleware) LimitRate(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !m.rateLimitEnabled || m.rateLimiter == nil {
+			next(w, r)
+			return
+		}
+
+		// health-check не лимитируется
+		if r.URL.Path == "/api/health" {
+			next(w, r)
+			return
+		}
+
+		ip := getClientIP(r)
+		bucket := m.rateLimiter.GetBucket(ip)
+
+		if bucket.TakeAvailable(1) == 0 {
+			m.logger.
+				WithField("ip", ip).
+				WithField("path", r.URL.Path).
+				Warn("rate limit exceeded")
+
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", m.rateLimiter.capacity))
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("Retry-After", "1")
+
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":"rate_limit_exceeded","message":"Too many requests. Please try again later."}`))
+			return
+		}
+
+		remaining := bucket.Available()
+		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", m.rateLimiter.capacity))
+		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+
+		next(w, r)
+	}
+}
+
+// LoggingMiddleware предоставляет утилиты: логирование, CORS, recovery, request ID и т.д.
+//type LoggingMiddleware struct {
+//	logger *logrus.Entry
+//}
+
+// NewLoggingMiddleware создаёт новый экземпляр middleware
+//func NewLoggingMiddleware(logger *logrus.Logger) *LoggingMiddleware {
+//	return &LoggingMiddleware{
+//		logger: logger.WithField("component", "middleware"),
+//	}
+//}
 
 // Logger логирует все HTTP-запросы с временем выполнения и статусом
 func (m *LoggingMiddleware) Logger(next http.HandlerFunc) http.HandlerFunc {
@@ -72,10 +132,11 @@ func (m *LoggingMiddleware) Logger(next http.HandlerFunc) http.HandlerFunc {
 
 func (m *LoggingMiddleware) Chain() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		// Порядок важен: CORS → RequestID → Logger → Recovery
+		// Порядок важен: CORS → LimitRate → RequestID → Logger → Recovery		
 		h := http.HandlerFunc(m.Recovery(next.ServeHTTP)) // ловит панику, когда request_id уже есть
-		h = http.HandlerFunc(m.RequestID(h.ServeHTTP))    // создаёт request_id до Recovery
 		h = http.HandlerFunc(m.Logger(h.ServeHTTP))       // логирует уже с request_id
+		h = http.HandlerFunc(m.RequestID(h.ServeHTTP))    // создаёт request_id до Recovery
+		h = http.HandlerFunc(m.LimitRate(h.ServeHTTP)) // после CORS, до RequestID
 		h = http.HandlerFunc(m.CORS(h.ServeHTTP))         // самый внешний
 
 		return h
