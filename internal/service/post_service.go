@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type PostService struct {
@@ -23,6 +24,7 @@ func NewPostService(postRepo repository.PostRepository, userRepo repository.User
 
 // Create создаёт новый пост от имени пользователя
 func (s *PostService) Create(ctx context.Context, userID int, req *model.PostCreateRequest) (*model.Post, error) {
+
 	// 1. Валидация данных
 	if err := validatePostCreateRequest(req); err != nil {
 		return nil, err
@@ -35,6 +37,31 @@ func (s *PostService) Create(ctx context.Context, userID int, req *model.PostCre
 		AuthorID: userID,
 	}
 
+	// 3. Логика отложенной публикации
+	now := time.Now()
+	if post.PublishAt != nil && post.PublishAt.After(now) {
+		post.Status = "draft"
+	} else {
+		post.Status = "published"
+		post.PublishAt = nil // если время в прошлом — публикуем сразу
+	}
+
+	/*
+		if req.PublishAt != nil {
+			if req.PublishAt.After(now) {
+				// Время в будущем -> сохраняем как черновик
+				post.Status = "draft"
+				post.PublishAt = req.PublishAt
+			} else {
+				// Время в прошлом или сейчас -> публикуем сразу
+				post.Status = "published"
+				post.PublishAt = nil // Не храним прошлое время публикации
+			}
+		} else {
+			// Если время не указано -> публикуем сразу
+			post.Status = "published"
+			post.PublishAt = nil
+		}*/
 	// 3. Сохранить через репозиторий
 	if err := s.postRepo.Create(ctx, post); err != nil {
 		return nil, fmt.Errorf("failed to create post: %w", err)

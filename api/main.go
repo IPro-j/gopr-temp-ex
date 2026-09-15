@@ -7,6 +7,7 @@ import (
 	"advanced-blog-management-system/internal/service"
 	"advanced-blog-management-system/pkg/auth"
 	"advanced-blog-management-system/pkg/database"
+	"advanced-blog-management-system/pkg/scheduler"
 	"context"
 	"net/http"
 	"os"
@@ -56,24 +57,23 @@ func main() {
 
 	logrus.WithField("component", "database").Info("mDatabase connected successfully")
 
-
 	if cfg.RateLimitEnabled {
-	windowSeconds := int64(cfg.RateLimitWindowSecond)
-	capacity := int64(cfg.RateLimitMaxRequest)
-	rate := float64(capacity) / float64(windowSeconds)
+		windowSeconds := int64(cfg.RateLimitWindowSecond)
+		capacity := int64(cfg.RateLimitMaxRequest)
+		rate := float64(capacity) / float64(windowSeconds)
 
-	rateLimiter := middleware.NewRateLimiter(rate, capacity)
-	loggingMW.SetRateLimiter(rateLimiter)
+		rateLimiter := middleware.NewRateLimiter(rate, capacity)
+		loggingMW.SetRateLimiter(rateLimiter)
 
-	logrus.WithFields(logrus.Fields{
-		"component":         "rate_limiter",
-		"rate_tokens_per_sec": rate,
-		"capacity":           capacity,
-		"window_seconds":     windowSeconds,
-	}).Info("rate limiter enabled")
-} else {
-	logrus.WithField("component", "rate_limiter").Info("rate limiter disabled")
-}
+		logrus.WithFields(logrus.Fields{
+			"component":           "rate_limiter",
+			"rate_tokens_per_sec": rate,
+			"capacity":            capacity,
+			"window_seconds":      windowSeconds,
+		}).Info("rate limiter enabled")
+	} else {
+		logrus.WithField("component", "rate_limiter").Info("rate limiter disabled")
+	}
 
 	migrations := []string{
 		"./migrations/001_init_schema.sql",
@@ -98,6 +98,17 @@ func main() {
 	postRepo := repository.NewPostRepo(db)
 	commentRepo := repository.NewCommentRepo(db)
 	userRepo := repository.NewUserRepo(db)
+
+	// --- Планировщик отложенных публикаций ---
+	sched := scheduler.NewScheduler(
+		postRepo, // PostRepo реализует ScheduledPostRepository
+		logrus.StandardLogger(),
+		cfg.SchedulerIntervalSeconds,
+		cfg.SchedulerWorkers,
+	)
+
+	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
+	sched.Start(schedulerCtx)
 
 	userService := service.NewUserService(userRepo, jwtManager)
 	postService := service.NewPostService(postRepo, userRepo)
@@ -179,53 +190,63 @@ func main() {
 		logrus.Info("server stopped gracefully")
 	}
 
+	// 2. Останавливаем планировщик (отменяем ticker, ждём воркеров)
+	schedulerCancel()
+	sched.Stop()
+
+	logrus.Info("application shutdown complete")
+
 }
 
 type Config struct {
-	ServerHost              string
-	ServerPort              int
-	DBHost                  string
-	DBPort                  int
-	DBUser                  string
-	DBPassword              string
-	DBName                  string
-	DBSSLMode               string
-	DBMaxOpenConns          int
-	DBMaxIdleConns          int
-	JWTSecret               string
-	JWTExpiryHours          int
-	CacheTTLMinutes         int
-	HttpReadTimeout         int
-	HttpWriteTimeout        int
-	HttpIdleTimeout         int
-	HttpShutdownGracePeriod int
-	RateLimitEnabled        bool
-	RateLimitWindowSecond   int
-	RateLimitMaxRequest     int
+	ServerHost               string
+	ServerPort               int
+	DBHost                   string
+	DBPort                   int
+	DBUser                   string
+	DBPassword               string
+	DBName                   string
+	DBSSLMode                string
+	DBMaxOpenConns           int
+	DBMaxIdleConns           int
+	JWTSecret                string
+	JWTExpiryHours           int
+	CacheTTLMinutes          int
+	HttpReadTimeout          int
+	HttpWriteTimeout         int
+	HttpIdleTimeout          int
+	HttpShutdownGracePeriod  int
+	RateLimitEnabled         bool
+	RateLimitWindowSecond    int
+	RateLimitMaxRequest      int
+	SchedulerIntervalSeconds int
+	SchedulerWorkers         int
 }
 
 func loadConfig() *Config {
 	return &Config{
-		ServerHost:              getEnv("SERVER_HOST", "0.0.0.0"),
-		ServerPort:              getEnvAsInt("SERVER_PORT", 8080),
-		DBHost:                  getEnv("DB_HOST", "localhost"),
-		DBPort:                  getEnvAsInt("DB_PORT", 5432),
-		DBUser:                  getEnv("DB_USER", "bloguser"),
-		DBPassword:              getEnv("DB_PASSWORD", "blogpassword"),
-		DBName:                  getEnv("DB_NAME", "blogdb"),
-		DBSSLMode:               getEnv("DB_SSLMODE", "disable"),
-		DBMaxOpenConns:          getEnvAsInt("DB_MAX_OPEN_CONNS", 25),
-		DBMaxIdleConns:          getEnvAsInt("DB_MAX_IDLE_CONNS", 5),
-		JWTSecret:               getEnv("JWT_SECRET", ""),
-		JWTExpiryHours:          getEnvAsInt("JWT_EXPIRY_HOURS", 24),
-		CacheTTLMinutes:         getEnvAsInt("CACHE_TTL_MINUTES", 60),
-		HttpReadTimeout:         getEnvAsInt("HTTP_READ_TIMEOUT", 15),
-		HttpWriteTimeout:        getEnvAsInt("HTTP_WRITE_TIMEOUT", 15),
-		HttpIdleTimeout:         getEnvAsInt("HTTP_IDLE_TIMEOUT", 60),
-		HttpShutdownGracePeriod: getEnvAsInt("HTTP_SHUTDOWN_GRACE_PERIOD", 30),
-		RateLimitEnabled:        os.Getenv("RATE_LIMIT_ENABLED") == "true",
-		RateLimitWindowSecond:   getEnvAsInt("RATE_LIMIT_WINDOW_SECONDS", 60),
-		RateLimitMaxRequest:     getEnvAsInt("RATE_LIMIT_MAX_REQUESTS", 100),
+		ServerHost:               getEnv("SERVER_HOST", "0.0.0.0"),
+		ServerPort:               getEnvAsInt("SERVER_PORT", 8080),
+		DBHost:                   getEnv("DB_HOST", "localhost"),
+		DBPort:                   getEnvAsInt("DB_PORT", 5432),
+		DBUser:                   getEnv("DB_USER", "bloguser"),
+		DBPassword:               getEnv("DB_PASSWORD", "blogpassword"),
+		DBName:                   getEnv("DB_NAME", "blogdb"),
+		DBSSLMode:                getEnv("DB_SSLMODE", "disable"),
+		DBMaxOpenConns:           getEnvAsInt("DB_MAX_OPEN_CONNS", 25),
+		DBMaxIdleConns:           getEnvAsInt("DB_MAX_IDLE_CONNS", 5),
+		JWTSecret:                getEnv("JWT_SECRET", ""),
+		JWTExpiryHours:           getEnvAsInt("JWT_EXPIRY_HOURS", 24),
+		CacheTTLMinutes:          getEnvAsInt("CACHE_TTL_MINUTES", 60),
+		HttpReadTimeout:          getEnvAsInt("HTTP_READ_TIMEOUT", 15),
+		HttpWriteTimeout:         getEnvAsInt("HTTP_WRITE_TIMEOUT", 15),
+		HttpIdleTimeout:          getEnvAsInt("HTTP_IDLE_TIMEOUT", 60),
+		HttpShutdownGracePeriod:  getEnvAsInt("HTTP_SHUTDOWN_GRACE_PERIOD", 30),
+		RateLimitEnabled:         os.Getenv("RATE_LIMIT_ENABLED") == "true",
+		RateLimitWindowSecond:    getEnvAsInt("RATE_LIMIT_WINDOW_SECONDS", 60),
+		RateLimitMaxRequest:      getEnvAsInt("RATE_LIMIT_MAX_REQUESTS", 100),
+		SchedulerIntervalSeconds: getEnvAsInt("SCHEDULER_INTERVAL_SECONDS", 30),
+		SchedulerWorkers:         getEnvAsInt("SCHEDULER_WORKERS", 3),
 	}
 }
 

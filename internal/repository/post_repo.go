@@ -3,6 +3,7 @@ package repository
 import (
 	"advanced-blog-management-system/internal/model"
 	"advanced-blog-management-system/pkg/apperr"
+	"advanced-blog-management-system/pkg/scheduler"
 	"context"
 	"database/sql"
 	"errors"
@@ -21,12 +22,20 @@ func NewPostRepo(db *sql.DB) *PostRepo {
 // Create сохраняет новый пост.
 func (r *PostRepo) Create(ctx context.Context, post *model.Post) error {
 	const query = `
-		INSERT INTO posts (title, content, author_id, created_at, updated_at)
-		VALUES ($1, $2, $3, NOW(), NOW())
+		INSERT INTO posts (
+			title, 
+			content, 
+			author_id, 
+			status, 
+			publish_at, 
+			created_at, 
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
 		RETURNING id, created_at, updated_at
 	`
 
-	err := r.db.QueryRowContext(ctx, query, post.Title, post.Content, post.AuthorID).
+	err := r.db.QueryRowContext(ctx, query, post.Title, post.Content, post.AuthorID, post.Status, post.PublishAt).
 		Scan(&post.ID, &post.CreatedAt, &post.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to create post: %w", err)
@@ -208,4 +217,50 @@ func (r *PostRepo) CountByAuthor(ctx context.Context, authorID int) (int, error)
 	}
 
 	return total, nil
+}
+
+// GetPostsReadyToPublish возвращает посты, у которых пришло время публикации
+func (r *PostRepo) GetPostsReadyToPublish(ctx context.Context) ([]scheduler.ScheduledPost, error) {
+	query := `
+        SELECT id, title
+        FROM posts
+        WHERE status = 'draft'
+          AND publish_at IS NOT NULL
+          AND publish_at <= NOW()
+    `
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var posts []scheduler.ScheduledPost
+	for rows.Next() {
+		var p scheduler.ScheduledPost
+		if err := rows.Scan(&p.ID, &p.Title); err != nil {
+			return nil, err
+		}
+		posts = append(posts, p)
+	}
+	return posts, rows.Err()
+}
+
+// MarkAsPublished переводит пост из draft в published
+func (r *PostRepo) MarkAsPublished(ctx context.Context, postID int64) error {
+	query := `
+        UPDATE posts
+        SET status = 'published', updated_at = NOW()
+        WHERE id = $1 AND status = 'draft'
+    `
+	result, err := r.db.ExecContext(ctx, query, postID)
+	if err != nil {
+		return err
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		// Пост уже опубликован или не найден — не ошибка, просто пропуск
+		return nil
+	}
+	return nil
 }

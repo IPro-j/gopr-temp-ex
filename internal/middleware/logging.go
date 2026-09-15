@@ -25,10 +25,9 @@ const (
 //	logger *log.Logger
 //}
 
-
 type LoggingMiddleware struct {
-	logger          *logrus.Entry
-	rateLimiter     *RateLimiter
+	logger           *logrus.Entry
+	rateLimiter      *RateLimiter
 	rateLimitEnabled bool
 }
 
@@ -43,7 +42,6 @@ func (m *LoggingMiddleware) SetRateLimiter(rl *RateLimiter) {
 	m.rateLimiter = rl
 	m.rateLimitEnabled = true
 }
-
 
 func (m *LoggingMiddleware) LimitRate(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -85,18 +83,6 @@ func (m *LoggingMiddleware) LimitRate(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// LoggingMiddleware предоставляет утилиты: логирование, CORS, recovery, request ID и т.д.
-//type LoggingMiddleware struct {
-//	logger *logrus.Entry
-//}
-
-// NewLoggingMiddleware создаёт новый экземпляр middleware
-//func NewLoggingMiddleware(logger *logrus.Logger) *LoggingMiddleware {
-//	return &LoggingMiddleware{
-//		logger: logger.WithField("component", "middleware"),
-//	}
-//}
-
 // Logger логирует все HTTP-запросы с временем выполнения и статусом
 func (m *LoggingMiddleware) Logger(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -132,12 +118,15 @@ func (m *LoggingMiddleware) Logger(next http.HandlerFunc) http.HandlerFunc {
 
 func (m *LoggingMiddleware) Chain() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		// Порядок важен: CORS → LimitRate → RequestID → Logger → Recovery		
+		// Порядок важен: CORS → LimitRate → RequestID → Logger → Recovery
 		h := http.HandlerFunc(m.Recovery(next.ServeHTTP)) // ловит панику, когда request_id уже есть
 		h = http.HandlerFunc(m.Logger(h.ServeHTTP))       // логирует уже с request_id
 		h = http.HandlerFunc(m.RequestID(h.ServeHTTP))    // создаёт request_id до Recovery
-		h = http.HandlerFunc(m.LimitRate(h.ServeHTTP)) // после CORS, до RequestID
-		h = http.HandlerFunc(m.CORS(h.ServeHTTP))         // самый внешний
+		if m.rateLimitEnabled && m.rateLimiter != nil {
+			h = http.HandlerFunc(m.LimitRate(h.ServeHTTP)) // после CORS, до RequestID
+		}
+
+		h = http.HandlerFunc(m.CORS(h.ServeHTTP)) // самый внешний
 
 		return h
 	}
