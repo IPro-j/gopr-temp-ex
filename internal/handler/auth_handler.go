@@ -24,6 +24,8 @@ type AuthHandler struct {
 	jwtManager  *auth.JWTManager
 }
 
+// UserServiceInterface позволяет подменять UserService в тестах
+
 func NewAuthHandler(userService *service.UserService, jwtManager *auth.JWTManager) *AuthHandler {
 	return &AuthHandler{
 		userService: userService,

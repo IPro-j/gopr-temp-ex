@@ -2,6 +2,8 @@ package model
 
 import (
 	"time"
+
+	"github.com/go-playground/validator/v10"
 )
 
 const (
@@ -117,108 +119,66 @@ type CommentResponse struct {
 	UpdatedAt time.Time    `json:"updated_at"`
 }
 
-// TODO: Реализовать метод ToResponse для User
-// Преобразует User в UserResponse (без пароля)
-// Должен скопировать поля ID, Username, Email, CreatedAt в новую структуру UserResponse
+// ToResponse преобразует User в UserResponse (без пароля)
 func (u *User) ToResponse() UserResponse {
-	// TODO: реализовать
-	return UserResponse{}
+	return UserResponse{
+		ID:        u.ID,
+		Username:  u.Username,
+		Email:     u.Email,
+		CreatedAt: u.CreatedAt,
+	}
 }
 
-// TODO: Реализовать метод CanBeEditedBy для Post
-// Проверяет может ли пользователь с userID редактировать этот пост
-// Пост может редактировать только его автор
 func (p *Post) CanBeEditedBy(userID int) bool {
-	// TODO: реализовать - сравнить p.AuthorID с userID
-	return false
+	return p.AuthorID == userID
 }
 
-// TODO: Реализовать метод CanBeDeletedBy для Post
-// Проверяет может ли пользователь с userID удалить этот пост
-// Пост может удалить только его автор
 func (p *Post) CanBeDeletedBy(userID int) bool {
-	// TODO: реализовать - сравнить p.AuthorID с userID
-	return false
+	return p.AuthorID == userID
 }
 
-// TODO: Реализовать метод CanBeEditedBy для Comment
-// Проверяет может ли пользователь с userID редактировать этот комментарий
-// Комментарий может редактировать только его автор
 func (c *Comment) CanBeEditedBy(userID int) bool {
-	// TODO: реализовать - сравнить c.AuthorID с userID
-	return false
+	return c.AuthorID == userID
 }
 
-// TODO: Реализовать метод CanBeDeletedBy для Comment
-// Проверяет может ли пользователь с userID удалить этот комментарий
-// Комментарий может удалить только его автор
 func (c *Comment) CanBeDeletedBy(userID int) bool {
-	// TODO: реализовать - сравнить c.AuthorID с userID
-	return false
+	return c.AuthorID == userID
 }
 
-// TODO: Реализовать метод IsScheduled для Post
-// Проверяет является ли пост отложенной публикацией (scheduled post)
-// Пост считается scheduled если:
-// - Status == PostStatusDraft (это черновик)
-// - PublishAt != nil (время публикации установлено)
-// - PublishAt находится в будущем (PublishAt.After(time.Now()))
 func (p *Post) IsScheduled() bool {
-	// TODO: реализовать проверку трех условий выше
-	return false
+	return p.Status == PostStatusDraft &&
+		p.PublishAt != nil &&
+		p.PublishAt.After(time.Now())
 }
 
-// TODO: Реализовать метод ShouldPublishNow для Post
-// Проверяет должен ли пост быть опубликован прямо сейчас
-// Пост должен быть опубликован если:
-// - Status == PostStatusDraft (это черновик)
-// - PublishAt != nil (время публикации установлено)
-// - PublishAt <= now (время публикации пришло или прошло)
 func (p *Post) ShouldPublishNow() bool {
-	// TODO: реализовать - проверка условий выше
-	// Подсказка: используйте !PublishAt.After(time.Now()) для проверки что время прошло
-	return false
+	return p.Status == PostStatusDraft &&
+		p.PublishAt != nil &&
+		!p.PublishAt.After(time.Now())
 }
 
-// TODO: Реализовать метод Validate для UserCreateRequest
-// Валидирует структуру используя github.com/go-playground/validator
-// Должен вернуть nil если валидация прошла, или ошибку если нет
+var validate = validator.New()
+
 func (r *UserCreateRequest) Validate() error {
-	// TODO: реализовать - создать validator и вызвать Struct(r)
-	return nil
+	return validate.Struct(r)
 }
 
-// TODO: Реализовать метод Validate для UserLoginRequest
-// Валидирует структуру используя validator
 func (r *UserLoginRequest) Validate() error {
-	// TODO: реализовать
-	return nil
+	return validate.Struct(r)
 }
 
-// TODO: Реализовать метод Validate для PostCreateRequest
-// Валидирует структуру используя validator
 func (r *PostCreateRequest) Validate() error {
-	// TODO: реализовать
-	return nil
+	return validate.Struct(r)
 }
 
-// TODO: Реализовать метод Validate для PostUpdateRequest
-// Валидирует структуру используя validator
 func (r *PostUpdateRequest) Validate() error {
-	// TODO: реализовать
-	return nil
+	return validate.Struct(r)
 }
 
-// TODO: Реализовать метод Validate для CommentCreateRequest
-// Валидирует структуру используя validator
 func (r *CommentCreateRequest) Validate() error {
-	// TODO: реализовать
-	return nil
+	return validate.Struct(r)
 }
 
-// TODO: Реализовать метод Validate для CommentUpdateRequest
-// Валидирует структуру используя validator
 func (r *CommentUpdateRequest) Validate() error {
-	// TODO: реализовать
-	return nil
+	return validate.Struct(r)
 }

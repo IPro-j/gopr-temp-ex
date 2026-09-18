@@ -43,6 +43,16 @@ func (m *LoggingMiddleware) SetRateLimiter(rl *RateLimiter) {
 	m.rateLimitEnabled = true
 }
 
+// RateLimitEnabled возвращает текущее состояние rate limiter
+func (m *LoggingMiddleware) RateLimitEnabled() bool {
+	return m.rateLimitEnabled
+}
+
+// GetRateLimiter возвращает текущий rate limiter (может быть nil)
+func (m *LoggingMiddleware) GetRateLimiter() *RateLimiter {
+	return m.rateLimiter
+}
+
 func (m *LoggingMiddleware) LimitRate(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !m.rateLimitEnabled || m.rateLimiter == nil {
@@ -50,8 +60,8 @@ func (m *LoggingMiddleware) LimitRate(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// health-check не лимитируется
-		if r.URL.Path == "/api/health" {
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/api/health") {
 			next(w, r)
 			return
 		}
@@ -59,25 +69,35 @@ func (m *LoggingMiddleware) LimitRate(next http.HandlerFunc) http.HandlerFunc {
 		ip := getClientIP(r)
 		bucket := m.rateLimiter.GetBucket(ip)
 
-		if bucket.TakeAvailable(1) == 0 {
-			m.logger.
-				WithField("ip", ip).
-				WithField("path", r.URL.Path).
-				Warn("rate limit exceeded")
-
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", m.rateLimiter.capacity))
-			w.Header().Set("X-RateLimit-Remaining", "0")
-			w.Header().Set("Retry-After", "1")
-
-			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error":"rate_limit_exceeded","message":"Too many requests. Please try again later."}`))
-			return
-		}
-
+		// Сначала пробуем взять токен
+		took := bucket.TakeAvailable(1)
+		// Сразу получаем актуальное оставшееся количество
 		remaining := bucket.Available()
+
 		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", m.rateLimiter.capacity))
 		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+
+		if took == 0 {
+			m.logger.WithFields(logrus.Fields{
+				"ip":                ip,
+				"path":              path,
+				"rate_limit_status": "blocked",
+				"remaining":         remaining,
+			}).Warn("rate limit exceeded")
+
+			w.Header().Set("Retry-After", "1")
+
+			resp := map[string]string{
+				"error":   "rate_limit_exceeded",
+				"message": "Too many requests. Please try again later.",
+			}
+			body, _ := json.Marshal(resp)
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write(body)
+			return
+		}
 
 		next(w, r)
 	}
@@ -232,13 +252,13 @@ func (m *LoggingMiddleware) RequestID(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// ContentTypeJSON принудительно ставит Content-Type: application/json для всех ответов
+/* ContentTypeJSON принудительно ставит Content-Type: application/json для всех ответов
 func (m *LoggingMiddleware) ContentTypeJSON(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		next(w, r)
 	}
-}
+}*/
 
 // getClientIP извлекает реальный IP клиента с учётом прокси
 func getClientIP(r *http.Request) string {

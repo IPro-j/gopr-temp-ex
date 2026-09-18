@@ -55,9 +55,10 @@ func (r *PostRepo) Exists(ctx context.Context, id int) (bool, error) {
 }
 
 // GetByID получает пост по ID. Если не найден — возвращает ErrPostNotFound.
+
 func (r *PostRepo) GetByID(ctx context.Context, id int) (*model.Post, error) {
 	const query = `
-		SELECT id, title, content, author_id, created_at, updated_at
+		SELECT id, title, content, author_id, status, publish_at, created_at, updated_at
 		FROM posts
 		WHERE id = $1
 	`
@@ -65,7 +66,16 @@ func (r *PostRepo) GetByID(ctx context.Context, id int) (*model.Post, error) {
 	row := r.db.QueryRowContext(ctx, query, id)
 
 	var p model.Post
-	err := row.Scan(&p.ID, &p.Title, &p.Content, &p.AuthorID, &p.CreatedAt, &p.UpdatedAt)
+	err := row.Scan(
+		&p.ID,
+		&p.Title,
+		&p.Content,
+		&p.AuthorID,
+		&p.Status,
+		&p.PublishAt,
+		&p.CreatedAt,
+		&p.UpdatedAt,
+	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, apperr.ErrPostNotFound
@@ -87,15 +97,24 @@ func (r *PostRepo) GetTotalCount(ctx context.Context) (int, error) {
 }
 
 func (r *PostRepo) GetAll(ctx context.Context, limit, offset int) ([]*model.Post, error) {
-	query := `
-		SELECT id, title, content, author_id, created_at, updated_at
+	const query = `
+		SELECT
+			id,
+			title,
+			content,
+			author_id,
+			status,
+			publish_at,
+			created_at,
+			updated_at
 		FROM posts
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
 	`
+
 	rows, err := r.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query posts: %w", err)
 	}
 	defer rows.Close()
 
@@ -107,17 +126,19 @@ func (r *PostRepo) GetAll(ctx context.Context, limit, offset int) ([]*model.Post
 			&p.Title,
 			&p.Content,
 			&p.AuthorID,
+			&p.Status,
+			&p.PublishAt,
 			&p.CreatedAt,
 			&p.UpdatedAt,
 		)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to scan post row: %w", err)
 		}
 		posts = append(posts, &p)
 	}
 
-	if rows.Err() != nil {
-		return nil, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating posts rows: %w", err)
 	}
 
 	return posts, nil
@@ -176,7 +197,15 @@ func (r *PostRepo) Delete(ctx context.Context, id int) error {
 // ListByAuthor возвращает посты конкретного автора с пагинацией.
 func (r *PostRepo) ListByAuthor(ctx context.Context, authorID int, limit, offset int) ([]*model.Post, error) {
 	const query = `
-		SELECT id, title, content, author_id, created_at, updated_at
+		SELECT
+			id,
+			title,
+			content,
+			author_id,
+			status,
+			publish_at,
+			created_at,
+			updated_at
 		FROM posts
 		WHERE author_id = $1
 		ORDER BY created_at DESC
@@ -192,7 +221,16 @@ func (r *PostRepo) ListByAuthor(ctx context.Context, authorID int, limit, offset
 	var posts []*model.Post
 	for rows.Next() {
 		var p model.Post
-		err := rows.Scan(&p.ID, &p.Title, &p.Content, &p.AuthorID, &p.CreatedAt, &p.UpdatedAt)
+		err := rows.Scan(
+			&p.ID,
+			&p.Title,
+			&p.Content,
+			&p.AuthorID,
+			&p.Status,
+			&p.PublishAt,
+			&p.CreatedAt,
+			&p.UpdatedAt,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan post row for author: %w", err)
 		}

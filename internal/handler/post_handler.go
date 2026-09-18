@@ -22,9 +22,7 @@ const (
 )
 
 func NewPostHandler(postService *service.PostService) *PostHandler {
-	return &PostHandler{
-		postService: postService,
-	}
+	return &PostHandler{postService: postService}
 }
 
 // Create обрабатывает создание нового поста
@@ -88,48 +86,6 @@ func (h *PostHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(post)
 }
-
-// GetAll возвращает список постов с пагинацией
-/*func (h *PostHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	query := r.URL.Query()
-	limit, _ := strconv.Atoi(query.Get("limit"))
-	if limit <= 0 {
-		limit = 10
-	}
-	offset, _ := strconv.Atoi(query.Get("offset"))
-	if offset < 0 {
-		offset = 0
-	}
-
-	posts, total, err := h.postService.GetAll(r.Context(), limit, offset)
-	if err != nil {
-		writeError(w, "failed to get posts", http.StatusInternalServerError)
-		return
-	}
-
-	type PostsResponse struct {
-		Posts  []*model.Post `json:"posts"`
-		Total  int           `json:"total"`
-		Limit  int           `json:"limit"`
-		Offset int           `json:"offset"`
-	}
-
-	resp := PostsResponse{
-		Posts:  posts,
-		Total:  total,
-		Limit:  limit,
-		Offset: offset,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
-}*/
 
 // GetAll возвращает список постов с пагинацией
 func (h *PostHandler) GetAll(w http.ResponseWriter, r *http.Request) {

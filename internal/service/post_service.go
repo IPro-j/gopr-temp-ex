@@ -13,7 +13,6 @@ import (
 
 type PostService struct {
 	postRepo repository.PostRepository
-	//userRepo repository.UserRepository
 }
 
 func NewPostService(postRepo repository.PostRepository, userRepo repository.UserRepository) *PostService {
@@ -32,9 +31,10 @@ func (s *PostService) Create(ctx context.Context, userID int, req *model.PostCre
 
 	// 2. Создать модель поста
 	post := &model.Post{
-		Title:    strings.TrimSpace(req.Title),
-		Content:  strings.TrimSpace(req.Content),
-		AuthorID: userID,
+		Title:     strings.TrimSpace(req.Title),
+		Content:   strings.TrimSpace(req.Content),
+		AuthorID:  userID,
+		PublishAt: req.PublishAt,
 	}
 
 	// 3. Логика отложенной публикации
@@ -46,22 +46,6 @@ func (s *PostService) Create(ctx context.Context, userID int, req *model.PostCre
 		post.PublishAt = nil // если время в прошлом — публикуем сразу
 	}
 
-	/*
-		if req.PublishAt != nil {
-			if req.PublishAt.After(now) {
-				// Время в будущем -> сохраняем как черновик
-				post.Status = "draft"
-				post.PublishAt = req.PublishAt
-			} else {
-				// Время в прошлом или сейчас -> публикуем сразу
-				post.Status = "published"
-				post.PublishAt = nil // Не храним прошлое время публикации
-			}
-		} else {
-			// Если время не указано -> публикуем сразу
-			post.Status = "published"
-			post.PublishAt = nil
-		}*/
 	// 3. Сохранить через репозиторий
 	if err := s.postRepo.Create(ctx, post); err != nil {
 		return nil, fmt.Errorf("failed to create post: %w", err)
